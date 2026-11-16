@@ -1,5 +1,5 @@
 {
-  "tag": "v64",
-  "installer": "Nexus-v64-Windows-x64-Setup.exe",
-  "sha256": "c458d0fb8d0838a8c444cf6833a7a7672f4c2869c789a7b94400904c7c0fbfa2"
+  "tag": "v65",
+  "installer": "Nexus-v65-Windows-x64-Setup.exe",
+  "sha256": "8fee8cfc46b65ba04495392390b6721245bd20387ee150415934e17d30f2655b"
 }
