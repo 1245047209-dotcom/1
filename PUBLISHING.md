@@ -1,23 +1,15 @@
-# Nexus GitHub 在线更新发布
+# Nexus 版本发布
 
-更新页面：https://github.com/1245047209-dotcom/1/releases
+工作流 `.github/workflows/publish-release.yml` 在 Windows runner 内构建和验证安装包。
 
-客户端设置“检查更新”调用公开 GitHub Releases API，不需要单独维护服务器。
+1. 修改 `app/` 下的源码及测试，把 `app/VERSION` 更新到新的版本。
+2. 更新 `release-input/release.json` 中的版本与附件名称，以及 `release-input/notes.md` 中的发布说明。
+3. 保留或核对固定的基线安装包和编译器 SHA-256；新增的图片、图标等资源提交到 `app/assets/`。
+4. 提交到 main 后，工作流验证下载、重建干净的运行环境和产品图库、覆盖当前源码，再运行测试、GUI 检查和实际安装检查。
+5. 生成安装包、完整源码 ZIP 和校验文件，先上传完整草稿 Release，最后发布为正式版并标记 latest。已有同版本会拒绝覆盖。
 
-## 后续发布新版本
+基线安装包只用于提供经校验的公开运行时及旧资源，用户设备列表、更新偏好、日志、进程文件和电量历史不进入发布包。安装检查会验证覆盖安装保留这些文件。
 
-1. 修改程序版本号，打包新安装程序，例如 `Nexus-v60-Windows-x64-Setup.exe`。
-2. 生成 `Nexus-v60-SHA256.txt`，文件中记录安装程序的 SHA-256 和完整文件名。
-3. 在仓库 Releases 新建正式版本，标签填 `v60`，上传 EXE 和校验文件，填写更新说明并发布。
+完整源码 ZIP 不包含 Python 运行时，Windows 安装包包含运行时。发布阶段使用 GitHub Actions 自带的 GITHUB_TOKEN，构建阶段不使用该令牌。
 
-安装 v59 及之后版本的用户会在后台定时检查时收到提示，或通过“设置 → 检查更新”立即获取。
-安装前需用户确认。v58.1 及更早版本需要手动更新一次。
-
-## 首次发布工作流
-
-附带的 `.github/workflows/publish-release.yml` 验证 `release-input/release.json` 中的构建哈希，
-再创建草稿 Release、上传完整附件，最后发布为正式版本。
-发布令牌使用 GitHub Actions 自动生成的 `GITHUB_TOKEN`，不会进入软件或安装包。
-不覆盖已经发布的同版本；需要更新时使用新的版本标签。
-
-首次发布的安装包作为构建输入保存在 GitHub 仓库；后续也可以直接使用 Releases 网页上传，无需将安装包再次提交到仓库。
+V59 及之后的客户端可通过设置检查更新；更早版本需要手动安装新版一次。发布后应核对 Releases 的版本、附件和 SHA-256，以及客户端的更新检查结果。

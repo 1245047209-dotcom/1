@@ -1,0 +1,2 @@
+# Windows x64, Python 3.12 with Tcl/Tk (tkinter).
+# No third-party Python packages required.

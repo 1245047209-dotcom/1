@@ -1,5 +1,13 @@
 {
-  "tag": "v66",
-  "installer": "Nexus-v66-Windows-x64-Setup.exe",
-  "sha256": "6bcace07b798aea8b9cf0cf64c7b90d84795e1476dfa8ab15beb107575f838e3"
+  "tag": "v67",
+  "installer": "Nexus-v67-Windows-x64-Setup.exe",
+  "source": "Nexus-v67-source.zip",
+  "base_installer": {
+    "url": "https://github.com/1245047209-dotcom/1/releases/download/v66/Nexus-v66-Windows-x64-Setup.exe",
+    "sha256": "6bcace07b798aea8b9cf0cf64c7b90d84795e1476dfa8ab15beb107575f838e3"
+  },
+  "compiler": {
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_4_3/innosetup-6.4.3.exe",
+    "sha256": "f3c42116542c4cc57263c5ba6c4feabfc49fe771f2f98a79d2f7628b8762723b"
+  }
 }

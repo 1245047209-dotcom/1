@@ -2,7 +2,7 @@ name: Publish Nexus update
 on:
   push:
     branches: [main]
-    paths: ['release-input/**']
+    paths: ['app/**', 'scripts/**', 'release-input/**', '.github/workflows/publish-release.yml']
   workflow_dispatch:
 permissions:
   contents: write
@@ -11,29 +11,37 @@ concurrency:
   cancel-in-progress: false
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Verify installer and prepare release assets
-        id: prepare
-        shell: bash
-        run: |
-          tag=$(python3 scripts/prepare_release.py)
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and verify installer, source and upgrade behavior
+        shell: pwsh
+        run: ./scripts/build_windows_release.ps1
+      - name: Preserve verified release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-verified-release
+          path: dist/*
+          if-no-files-found: error
       - name: Publish complete release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ steps.prepare.outputs.tag }}
-          RELEASE_TARGET: ${{ github.sha }}
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "This version already exists; publish a new version instead."
-            exit 1
-          fi
-          gh release create "$RELEASE_TAG" dist/* --draft --target "$RELEASE_TARGET" --title "Nexus $RELEASE_TAG" --notes-file release-input/notes.md
-          gh release edit "$RELEASE_TAG" --draft=false --latest
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $tag = (Get-Content release-input/release.json -Raw | ConvertFrom-Json).tag
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'This version already exists; never overwrite a published release.' }
+          $artifacts = @(Get-ChildItem dist -File | ForEach-Object FullName)
+          gh release create $tag @artifacts --draft --target $env:GITHUB_SHA --title "Nexus $tag" --notes-file release-input/notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset upload failed' }
+          gh release edit $tag --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }

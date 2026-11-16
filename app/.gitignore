@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+runtime/
+*.log
+/added_devices.json
+/tray_config.json
+/update_state.json
+/tray_pid.txt
+/battery_*.json
+/low_battery_alert.json
+/low_battery_alert.lock
