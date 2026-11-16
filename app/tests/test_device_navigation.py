@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 from device_navigation import DeviceNavigation
 from view_switcher import ViewSwitcher
+from frame_pacer import FramePacer
 
 
 def control():
@@ -10,6 +11,7 @@ def control():
     widget.position = widget.origin = widget.target = 0.0
     widget.started, widget.after_id, widget.closed = 0.0, None, False
     widget.after, widget.after_cancel, widget.place_marker = Mock(return_value="timer"), Mock(), Mock()
+    widget.pacer = FramePacer(widget, clock=lambda: __import__("device_navigation").time.perf_counter(), resolution=Mock())
     return widget
 
 

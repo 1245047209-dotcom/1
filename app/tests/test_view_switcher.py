@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from view_switcher import ViewSwitcher
+from frame_pacer import FramePacer
 
 
 ITEMS = (("all", "全部设备", "all"), ("single", "单个设备", "single"))
@@ -16,6 +17,7 @@ def control():
     widget.started, widget.after_id, widget.closed = 0.0, None, False
     widget.pressed, widget.hover, widget.keyboard_focus = None, None, False
     widget.after, widget.after_cancel = Mock(return_value="timer"), Mock()
+    widget.pacer = FramePacer(widget, clock=lambda: __import__("view_switcher").time.perf_counter(), resolution=Mock())
     widget.place_thumb, widget.update_content, widget.build = Mock(), Mock(), Mock()
     widget.command = Mock()
     return widget

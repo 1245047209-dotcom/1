@@ -4,16 +4,18 @@ import time
 import tkinter as tk
 
 from ui_motion import ease_out_cubic
+from frame_pacer import FramePacer
 
 
 class CardHover:
     LIFT = 8
     RISE_SECONDS, FALL_SECONDS = .20, .24
 
-    def __init__(self, root, canvas, *, scale=1, assets=None, blocked=lambda: False, clock=time.monotonic):
+    def __init__(self, root, canvas, *, scale=1, assets=None, blocked=lambda: False, clock=time.perf_counter):
         self.root, self.canvas, self.scale = root, canvas, scale
         self.assets = Path(assets or Path(__file__).with_name("assets"))
         self.blocked, self.clock = blocked, clock
+        self.pacer = FramePacer(root, clock=clock)
         self.states, self.layers, self.shadow_cache = {}, {}, {}
         self.shadow_sources = []
         self.target, self.timer = None, None
@@ -94,7 +96,8 @@ class CardHover:
             state.update({"from": state["value"], "to": target, "started": now,
                           "duration": self.RISE_SECONDS if target else self.FALL_SECONDS})
         if self.timer is None:
-            self.timer = self.root.after(16, self.tick)
+            self.pacer.start()
+            self.timer = self.pacer.after(self.tick)
 
     def paint(self):
         for key, layer in self.layers.items():
@@ -115,7 +118,9 @@ class CardHover:
         moving = self.sample(self.clock())
         self.paint()
         if moving:
-            self.timer = self.root.after(16, self.tick)
+            self.timer = self.pacer.after(self.tick)
+        else:
+            self.pacer.stop()
 
     def hit(self, x, y):
         # The original footprint remains interactive as a card rises, preventing
@@ -148,6 +153,7 @@ class CardHover:
         if self.timer is not None:
             self.root.after_cancel(self.timer)
             self.timer = None
+        self.pacer.stop()
         self.enabled = False
         self.target = None
         self.states.clear()

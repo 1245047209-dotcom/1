@@ -2,6 +2,7 @@
 from pathlib import Path
 import time
 import tkinter as tk
+from frame_pacer import FramePacer
 
 
 class ViewSwitcher(tk.Canvas):
@@ -15,6 +16,7 @@ class ViewSwitcher(tk.Canvas):
                          bg="#ffffff", highlightthickness=0, borderwidth=0,
                          takefocus=True, cursor="hand2")
         self.ui, self.command = ui, command
+        self.pacer = FramePacer(self, clock=time.perf_counter)
         self.items, self.selected = (), None
         self.hover = self.pressed = None
         self.keyboard_focus = False
@@ -137,6 +139,7 @@ class ViewSwitcher(tk.Canvas):
             self.position = self.target
             self.place_thumb()
             return
+        self.pacer.start()
         self.tick()
 
     def tick(self):
@@ -147,9 +150,12 @@ class ViewSwitcher(tk.Canvas):
         self.place_thumb()
         self.update_content()
         if progress < 1:
-            self.after_id = self.after(16, self.tick)
+            self.after_id = self.pacer.after(self.tick)
+        else:
+            self.pacer.stop()
 
     def cancel_tick(self):
+        self.pacer.stop()
         if self.after_id is not None:
             try:
                 self.after_cancel(self.after_id)

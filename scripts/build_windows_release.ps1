@@ -33,6 +33,8 @@ python (Join-Path $PSScriptRoot 'check_release.py') $testRoot
 if ($LASTEXITCODE -ne 0) { throw 'Source regression tests failed' }
 python (Join-Path $PSScriptRoot 'gui_smoke.py') $testRoot
 if ($LASTEXITCODE -ne 0) { throw 'GUI smoke check failed' }
+python (Join-Path $PSScriptRoot 'staged_scene_smoke.py') $testRoot
+if ($LASTEXITCODE -ne 0) { throw 'Staged scene/cancellation check failed' }
 $unexpected = Get-ChildItem -LiteralPath $payload -File | Where-Object {
     ($_.Extension -eq '.json' -and $_.Name -ne 'SOURCE_MANIFEST.json') -or $_.Name -eq 'tray_pid.txt' -or $_.Extension -in @('.log','.lock')
 }

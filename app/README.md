@@ -1,4 +1,4 @@
-# Nexus 外设电量中心 · v67
+# Nexus 外设电量中心 · v68
 
 ## 运行
 
@@ -13,6 +13,14 @@ py -3.12 -m unittest discover -s tests
 ```
 
 也可使用附带的启动 BAT；若复制了现有便携版的 runtime 文件夹，会优先使用它。源码包不附个人设备列表，首次运行可通过“搜索设备”加入外设。
+
+## v68
+
+- 统一动画的 60 Hz 目标调度，使用高精度时钟和绝对时间安排下一帧。
+- 图片淡化采用 64 个档位的按需缓存，整组移动元素，只更新变化的属性。
+- 首次布局分批准备并统一提交；取消和连续切换不会显示过期布局。
+- 动画完成后局部刷新，停止时释放高精度计时请求。
+- 保留 V67 的界面与设备功能；首次加载或系统繁忙时仍可能出现慢帧。
 
 ## v67
 
@@ -32,6 +40,7 @@ PRO WIRELESS 使用 HID++ 直接读取电压和状态，百分比来自电压换
 
 - `my_devices.py` / `my_devices.pyw`：主界面及 GUI 入口。
 - `device_navigation.py` / `view_switcher.py`：导航控件与动画。
+- `frame_pacer.py` / `ui_motion.py` / `staged_canvas.py`：帧调度、透明度缓存与分批场景提交。
 - `query_coordinator.py` / `device_readers.py` / `reading_ui.py`：查询协调、读数模型与局部刷新。
 - `receiver_search.py` / `receiver_scan.py` / `saved_devices.py`：搜索、识别与设备管理。
 - `logitech_*` / `aula_*` / `beats_*`：对应设备读取实现。

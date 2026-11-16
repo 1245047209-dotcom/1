@@ -160,6 +160,10 @@ class UIScale:
         return self.images[name]
 
     def canvas(self, canvas):
+        for _ in self.canvas_steps(canvas):
+            pass
+
+    def canvas_steps(self, canvas):
         canvas.scale("all", 0, 0, self.factor, self.factor)
         for item in canvas.find_all():
             kind = canvas.type(item)
@@ -176,3 +180,4 @@ class UIScale:
             elif kind in ("line", "rectangle", "oval", "arc", "polygon"):
                 width = float(canvas.itemcget(item, "width"))
                 canvas.itemconfigure(item, width=width * self.factor)
+            yield

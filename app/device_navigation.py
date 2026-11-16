@@ -2,6 +2,7 @@
 from pathlib import Path
 import time
 import tkinter as tk
+from frame_pacer import FramePacer
 
 FONT = "Microsoft YaHei UI"
 
@@ -16,6 +17,7 @@ class DeviceNavigation(tk.Canvas):
                          bg="white", highlightthickness=0, borderwidth=0,
                          takefocus=True, cursor="hand2")
         self.ui, self.command, self.width, self.limit = ui, command, width, visible
+        self.pacer = FramePacer(self, clock=time.perf_counter)
         self.items, self.selected, self.start = (), None, 0
         self.hover, self.pressed, self.keyboard_focus = None, None, False
         self._pointer_focus = False
@@ -231,6 +233,7 @@ class DeviceNavigation(tk.Canvas):
             self.position = target
             self.place_marker()
             return
+        self.pacer.start()
         self.tick()
 
     def tick(self):
@@ -240,9 +243,12 @@ class DeviceNavigation(tk.Canvas):
         progress = self.sample(time.perf_counter())
         self.place_marker()
         if progress < 1:
-            self.after_id = self.after(16, self.tick)
+            self.after_id = self.pacer.after(self.tick)
+        else:
+            self.pacer.stop()
 
     def cancel_tick(self):
+        self.pacer.stop()
         if self.after_id is not None:
             try:
                 self.after_cancel(self.after_id)
