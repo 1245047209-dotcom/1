@@ -1,0 +1,39 @@
+name: Publish Nexus update
+on:
+  push:
+    branches: [main]
+    paths: ['release-input/**']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: nexus-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify installer and prepare release assets
+        id: prepare
+        shell: bash
+        run: |
+          tag=$(python3 scripts/prepare_release.py)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.prepare.outputs.tag }}
+          RELEASE_TARGET: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "This version already exists; publish a new version instead."
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" dist/* --draft --target "$RELEASE_TARGET" --title "Nexus $RELEASE_TAG" --notes-file release-input/notes.md
+          gh release edit "$RELEASE_TAG" --draft=false --latest
