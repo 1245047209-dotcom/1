@@ -22,18 +22,21 @@ $baseSetup = Join-Path $buildRoot 'base-setup.exe'
 $compilerSetup = Join-Path $buildRoot 'compiler-setup.exe'
 FetchVerified $meta.base_installer $baseSetup
 FetchVerified $meta.compiler $compilerSetup
-RunSetup $baseSetup @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOICONS',('/DIR="'+$baseline+'"'),('/LOG="'+(Join-Path $buildRoot 'baseline.log')+'"'))
-RunSetup $compilerSetup @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/NOICONS','/TASKS=""',('/DIR="'+$compiler+'"'),('/LOG="'+(Join-Path $buildRoot 'compiler.log')+'"'))
+RunSetup $baseSetup @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/NOICONS',('/DIR="'+$baseline+'"'),('/LOG="'+(Join-Path $buildRoot 'baseline.log')+'"'))
+RunSetup $compilerSetup @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/CURRENTUSER','/NOICONS','/TASKS=""',('/DIR="'+$compiler+'"'),('/LOG="'+(Join-Path $buildRoot 'compiler.log')+'"'))
 python (Join-Path $PSScriptRoot 'stage_payload.py') $repoRoot $baseline $payload
 if ($LASTEXITCODE -ne 0) { throw 'Payload staging failed' }
-python (Join-Path $PSScriptRoot 'check_release.py') $payload
+$testRoot = Join-Path $buildRoot 'source-test'
+python -c 'import shutil,sys;shutil.copytree(sys.argv[1],sys.argv[2])' $payload $testRoot
+if ($LASTEXITCODE -ne 0) { throw 'Isolated test staging failed' }
+python (Join-Path $PSScriptRoot 'check_release.py') $testRoot
 if ($LASTEXITCODE -ne 0) { throw 'Source regression tests failed' }
-python (Join-Path $PSScriptRoot 'gui_smoke.py') $payload
+python (Join-Path $PSScriptRoot 'gui_smoke.py') $testRoot
 if ($LASTEXITCODE -ne 0) { throw 'GUI smoke check failed' }
 $unexpected = Get-ChildItem -LiteralPath $payload -File | Where-Object {
     ($_.Extension -eq '.json' -and $_.Name -ne 'SOURCE_MANIFEST.json') -or $_.Name -eq 'tray_pid.txt' -or $_.Extension -in @('.log','.lock')
 }
-if ($unexpected) { throw 'Tests left runtime user state inside the release payload' }
+if ($unexpected) { throw ('Unexpected runtime state in pristine payload: ' + ($unexpected.Name -join ', ')) }
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
 $numericVersion = $meta.tag.Substring(1)
 while (($numericVersion.Split('.')).Count -lt 3) { $numericVersion += '.0' }
@@ -50,7 +53,7 @@ $sentinels = @{
 }
 foreach ($name in $sentinels.Keys) { [IO.File]::WriteAllText((Join-Path $smokeRoot $name),$sentinels[$name]) }
 $installer = Join-Path $dist $meta.installer
-RunSetup $installer @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOICONS','/TASKS=""',('/DIR="'+$smokeRoot+'"'),('/LOG="'+(Join-Path $buildRoot 'smoke-install.log')+'"'))
+RunSetup $installer @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/NOICONS','/TASKS=""',('/DIR="'+$smokeRoot+'"'),('/LOG="'+(Join-Path $buildRoot 'smoke-install.log')+'"'))
 foreach ($name in $sentinels.Keys) {
     if ([IO.File]::ReadAllText((Join-Path $smokeRoot $name)) -ne $sentinels[$name]) { throw "Upgrade replaced user data: $name" }
 }
