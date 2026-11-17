@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
     "interval": 60,        # 托盘轮询间隔（秒）
     "autostart": True,     # 开机自启
     "low_battery_alert": True,
+    "gpu_animation": True,
 }
 
 INTERVAL_CHOICES = [(30, "30 秒"), (60, "1 分钟"), (120, "2 分钟"),

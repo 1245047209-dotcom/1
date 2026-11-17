@@ -3,6 +3,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Iterator
 from frame_pacer import FramePacer
+from gpu_transition import create_backend
 
 FADE_STEPS = 64
 FADE_LOOKUPS = tuple(bytes(round(255 + (value - 255) * index / (FADE_STEPS-1)) for value in range(256))
@@ -20,7 +21,7 @@ def ease_out_cubic(progress):
 
 
 class DeviceTransition:
-    def __init__(self, root, reveal, *, clock=time.perf_counter, scale=1, finished=lambda: None):
+    def __init__(self, root, reveal, *, clock=time.perf_counter, scale=1, finished=lambda: None, gpu_enabled=True):
         self.root, self.reveal, self.clock = root, reveal, clock
         self.scale = scale
         self.phase, self.alpha, self.offset = "idle", 1.0, 0.0
@@ -32,6 +33,8 @@ class DeviceTransition:
         self.finished = finished
         self.pacer = FramePacer(root, clock=clock)
         self.builder = None
+        self.gpu_enabled = gpu_enabled
+        self.gpu = create_backend(root) if gpu_enabled else None
 
     @property
     def active(self):
@@ -41,7 +44,7 @@ class DeviceTransition:
         self.layers.clear()
         self.styles.clear()
 
-    def register(self, canvas, items):
+    def register(self, canvas, items, *, region=None):
         entries = []
         for item in items:
             kind = canvas.type(item)
@@ -55,7 +58,7 @@ class DeviceTransition:
         for item, _style in entries:
             canvas.addtag_withtag(tag, item)
         layer = {"canvas": canvas, "entries": entries, "offset": 0.0, "tag": tag,
-                 "applied": {item: dict(style) for item, style in entries}}
+                 "applied": {item: dict(style) for item, style in entries}, "region": region}
         self.styles.update({(canvas, item): style for item, style in entries})
         self.layers.append(layer)
         if self.active:
@@ -70,6 +73,8 @@ class DeviceTransition:
 
     def start(self):
         self.cancel_timer()
+        if self.gpu is not None and not self.gpu.active:
+            self.gpu.capture(self.layers, self.alpha, self.offset*self.scale)
         self.token += 1
         self.from_alpha, self.from_offset = self.alpha, self.offset
         self.phase = "out"
@@ -103,6 +108,8 @@ class DeviceTransition:
                 return
             else:
                 self.phase, self.alpha, self.offset = "idle", 1.0, 0.0
+                if self.gpu is not None:
+                    self.gpu.clear()
                 self.pacer.stop()
                 self.finished()
                 self.trim_frames()
@@ -126,22 +133,32 @@ class DeviceTransition:
             return
         except Exception:
             self.cancel_timer()
+            if self.gpu is not None:
+                self.gpu.clear()
             self.phase = "idle"
             raise
         self.timer = self.root.after(1, lambda: self.build_step(token))
 
     def ready(self, token):
         self.phase, self.alpha, self.offset = "in", 0.0, 24.0
+        if self.gpu is not None:
+            self.gpu.capture(self.layers, 0., 24.*self.scale)
+        if self.gpu is None or not self.gpu.active:
+            self.paint()
         self.started = self.clock()
         self.pacer.start()
         self.timer = self.pacer.after(lambda: self.step(token))
 
     def paint(self):
+        if self.gpu is not None and self.gpu.active and self.gpu.paint(self.alpha, self.offset*self.scale):
+            return
         for layer in self.layers:
             self.paint_layer(layer)
         self.trim_frames()
 
     def paint_layer(self, layer):
+        if self.gpu is not None and self.gpu.enabled and not self.gpu.failed and self.phase == "prepare":
+            return
         canvas = layer["canvas"]
         delta = self.offset - layer["offset"]
         if delta:
@@ -212,6 +229,8 @@ class DeviceTransition:
 
     def close(self):
         self.cancel_timer()
+        if self.gpu is not None:
+            self.gpu.close()
         self.token += 1
         self.phase = "idle"
         self.layers.clear()
@@ -219,3 +238,12 @@ class DeviceTransition:
         self.image_frames.clear()
         self.frame_sizes.clear()
         self.sources.clear()
+
+    def set_gpu_enabled(self, enabled):
+        self.cancel_timer()
+        if self.gpu is not None:
+            self.gpu.close()
+        self.gpu_enabled = bool(enabled)
+        self.gpu = create_backend(self.root) if enabled else None
+        self.phase, self.alpha, self.offset = "idle", 1., 0.
+        self.paint()

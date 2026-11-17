@@ -276,7 +276,8 @@ class NexusPanel:
         self.canvas.pack(fill="both", expand=True)
         from ui_motion import DeviceTransition
         self.transition = DeviceTransition(root, self.reveal_transition, scale=UI_SCALE,
-                                           finished=self.finish_transition)
+                                           finished=self.finish_transition,
+                                           gpu_enabled=bool(tc.load_config().get("gpu_animation", True)))
         from reading_ui import LiveItems, ReadingTimes
         self.live = LiveItems(self.transition.update_style)
         self.reading_times = ReadingTimes()
@@ -1190,7 +1191,8 @@ class NexusPanel:
         yield
         yield from self.ui.canvas_steps(self.canvas)
         yield
-        self.transition.register(self.canvas, body_items)
+        self.transition.register(self.canvas, body_items,
+                                 region=(0, self.ui.px(120), self.ui.px(w), self.ui.px(h-172)))
         yield
 
     def draw_footer(self, w, h):
@@ -1384,7 +1386,8 @@ class NexusPanel:
         yield
         yield from self.ui.canvas_steps(canvas)
         yield
-        self.transition.register(canvas, motion_items)
+        self.transition.register(canvas, motion_items,
+                                 region=(0, 0, self.ui.px(width), self.ui.px(viewport_height)))
         yield
         self.card_hover.register(hover_cards)
         yield

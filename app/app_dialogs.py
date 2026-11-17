@@ -226,6 +226,7 @@ class SettingsDialog(OverlayDialog):
         self.auto = tk.BooleanVar(value=panel.auto)
         self.boot = tk.BooleanVar(value=tc.is_autostart_enabled())
         self.alert = tk.BooleanVar(value=bool(tc.load_config().get("low_battery_alert", True)))
+        self.gpu = tk.BooleanVar(value=bool(tc.load_config().get("gpu_animation", True)))
         self.feedback = tk.StringVar()
         footer = tk.Frame(self.preferences, bg=WHITE)
         footer.pack(side="bottom", fill="x")
@@ -249,7 +250,8 @@ class SettingsDialog(OverlayDialog):
         self.combo.place(relx=1, rely=.5, x=-self.p(2), anchor="e")
         for title, detail, variable in (("自动刷新", "持续更新已连接设备的电量", self.auto),
                                         ("开机启动托盘", "登录 Windows 后在后台显示电量", self.boot),
-                                        ("低电量提醒", "电量低于 10% 时发送系统通知", self.alert)):
+                                        ("低电量提醒", "电量低于 10% 时发送系统通知", self.alert),
+                                        ("GPU 动画加速", "加速视图切换，不支持时自动兼容", self.gpu)):
             row = setting_row(self, rows, title, detail)
             Switch(row, variable, scale=self.scale).place(relx=1, rely=.5, anchor="e", x=-self.p(2))
         manager._attach(self)
@@ -274,10 +276,12 @@ class SettingsDialog(OverlayDialog):
             panel.auto = self.auto.get()
             panel.interval = next(sec for sec, label in tc.INTERVAL_CHOICES if label == self.interval.get())
             cfg = tc.load_config()
-            cfg.update(interval=panel.interval, autostart=self.boot.get(), low_battery_alert=self.alert.get())
+            cfg.update(interval=panel.interval, autostart=self.boot.get(), low_battery_alert=self.alert.get(),
+                       gpu_animation=self.gpu.get())
             tc.save_config(cfg)
             tc.post_to_tray(tc.MSG_RELOAD)
             panel.schedule()
+            panel.transition.set_gpu_enabled(self.gpu.get())
             panel.draw()
             self.feedback.set("设置已保存")
         except (OSError, ValueError, StopIteration) as exc:

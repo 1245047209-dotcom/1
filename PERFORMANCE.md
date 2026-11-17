@@ -1,3 +1,23 @@
+# v69 GPU 动画加速
+
+v69 增加硬件专用的 Direct2D 内容画面合成，保留 v68 的 Tk 布局与交互。
+首次初始化在后台完成，不访问 Tk 对象；未就绪或发生异常时回退原渲染。
+默认开启，可在设置中关闭。每阶段上传一次画面，空闲时不持续渲染。
+
+本机 Windows / RTX 3060 / Python 3.12 / 三设备真实 Tk 窗口对照：
+软件绘制回调中位数 2.0742 ms、P95 4.3019 ms；GPU 路径中位数
+0.3160 ms、P95 0.4390 ms。GPU 回调间隔中位数 16.4203 ms；首次捕获
+6.2278 ms，捕获中位数 7.5736 ms、最大 13.5998 ms。首次硬件初始化
+已在后台完成。259 个 GPU 帧共上传 18 次画面，播放期间未生成 CPU 淡入淡出图片。
+这是回调/提交耗时，不是 GPU 完成时间或屏幕呈现 FPS。调度目标仍为 60 Hz。
+
+验证：261 项回归检查、6 组布局、8 次连续中断、实际硬件路径及模拟 GPU
+不可用的自动回退。截图工具故障，人工视觉验收未完成。
+
+硬件专用目标及线程模型依据：
+[HARDWARE](https://learn.microsoft.com/en-us/windows/win32/api/d2d1/ne-d2d1-d2d1_render_target_type)、
+[多线程工厂](https://learn.microsoft.com/en-us/windows/win32/direct2d/multi-threaded-direct2d-apps)。
+
 # V68 动画性能
 
 V68 保留 Tkinter 界面，针对调度、重复绘制和首次布局构建做优化。
