@@ -1,0 +1,110 @@
+name: Build Nexus v70 installer
+on:
+  push:
+    branches: [build-v70-installer]
+    paths: ['.github/workflows/build-v70.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: nexus-v70-installer
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare exact v70 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          import hashlib, json, os, shutil, urllib.request, zipfile
+          from pathlib import Path
+          root = Path.cwd()
+          download = Path(os.environ['RUNNER_TEMP']) / 'nexus-v70-source-input'
+          download.mkdir()
+          archive = download / 'Nexus-v70-source.zip'
+          with urllib.request.urlopen('https://github.com/1245047209-dotcom/1/releases/download/v70/Nexus-v70-source.zip', timeout=60) as response, archive.open('wb') as target:
+              shutil.copyfileobj(response, target)
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == '8127d40f3318fa42ae351e5bfc19558531f029430125da015c448e5383e9f249'
+          extracted = download / 'extracted'
+          extracted.mkdir()
+          with zipfile.ZipFile(archive) as source:
+              for entry in source.infolist():
+                  assert (extracted / entry.filename).resolve().is_relative_to(extracted.resolve())
+                  assert (entry.external_attr >> 16) & 0o170000 != 0o120000
+              source.extractall(extracted)
+          app = extracted / 'Nexus-v70-source'
+          manifest = json.loads((app / 'SOURCE_MANIFEST.json').read_text(encoding='utf-8'))
+          assert manifest['version'] == 'v70'
+          for name, digest in manifest['files'].items():
+              assert (app / name).resolve().is_relative_to(app.resolve())
+              assert hashlib.sha256((app / name).read_bytes()).hexdigest() == digest, name
+          (app / 'SOURCE_MANIFEST.json').unlink()
+          shutil.rmtree(root / 'app')
+          shutil.copytree(app, root / 'app')
+          meta_path = root / 'release-input/release.json'
+          meta = json.loads(meta_path.read_text(encoding='utf-8'))
+          meta.update(tag='v70', installer='Nexus-v70-Windows-x64-Setup.exe', source='Nexus-v70-source.zip')
+          meta_path.write_text(json.dumps(meta, indent=2) + chr(10), encoding='utf-8')
+          stage = root / 'scripts/stage_payload.py'
+          text = stage.read_text(encoding='utf-8')
+          assert text.count('for item in baseline.iterdir():') == 1
+          stage.write_text(text.replace('for item in baseline.iterdir():', 'for item in [baseline / "runtime"]:'), encoding='utf-8')
+          build = root / 'scripts/build_windows_release.ps1'
+          text = build.read_text(encoding='utf-8')
+          text = text.replace('python (Join-Path', 'python -I (Join-Path').replace('python -c ', 'python -I -c ')
+          build.write_text(text, encoding='utf-8')
+          print('Exact v70 source verified and staged with pinned runtime')
+          '@ | python -I -
+          if ($LASTEXITCODE -ne 0) { throw 'Source preparation failed' }
+      - name: Build and verify installer
+        shell: pwsh
+        run: ./scripts/build_windows_release.ps1
+      - name: Preserve original source
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath dist/Nexus-v70-source.zip
+          Copy-Item -LiteralPath "$env:RUNNER_TEMP/nexus-v70-source-input/Nexus-v70-source.zip" -Destination dist/Nexus-v70-source.zip
+          python -I -c "from pathlib import Path; Path('dist/Nexus-v70-source.zip.sha256').write_text('8127d40f3318fa42ae351e5bfc19558531f029430125da015c448e5383e9f249  Nexus-v70-source.zip'+chr(10), encoding='ascii')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-v70-verified-release
+          path: dist/*
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Nexus-v70-verified-release
+          path: dist
+      - name: Add installer to v70 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum --check Nexus-v70-SHA256.txt
+          sha256sum --check Nexus-v70-source.zip.sha256
+          for name in Nexus-v70-Windows-x64-Setup.exe Nexus-v70-SHA256.txt Nexus-v70-source.zip.sha256; do
+            if gh release view v70 --json assets --jq '.assets[].name' | grep -Fxq "$name"; then
+              echo "Asset already exists: $name"
+              exit 1
+            fi
+          done
+          gh release upload v70 Nexus-v70-Windows-x64-Setup.exe Nexus-v70-SHA256.txt Nexus-v70-source.zip.sha256
+          gh release edit v70 --latest
+          gh release view v70 --json url,assets
