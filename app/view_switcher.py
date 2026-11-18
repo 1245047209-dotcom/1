@@ -11,11 +11,12 @@ class ViewSwitcher(tk.Canvas):
     DURATION = .18
     COLORS = {"active": "#ffffff", "idle": "#7b8695", "hover": "#303947"}
 
-    def __init__(self, master, *, ui, command):
+    def __init__(self, master, *, ui, command, show_icons=True):
         super().__init__(master, width=ui.px(self.WIDTH), height=ui.px(self.HEIGHT),
                          bg="#ffffff", highlightthickness=0, borderwidth=0,
                          takefocus=True, cursor="hand2")
         self.ui, self.command = ui, command
+        self.show_icons = show_icons
         self.pacer = FramePacer(self, clock=time.perf_counter)
         self.items, self.selected = (), None
         self.hover = self.pressed = None
@@ -29,8 +30,9 @@ class ViewSwitcher(tk.Canvas):
                       for state in self.COLORS}
         self.photos = {}
         directory = Path(__file__).resolve().parent / "assets" / "view-switcher"
-        names = ("track", "thumb", "hover", "focus") + tuple(
-            f"{kind}-{state}" for kind in ("all", "single") for state in self.COLORS)
+        names = ("track", "thumb", "hover", "focus")
+        if show_icons:
+            names += tuple(f"{kind}-{state}" for kind in ("all", "single") for state in self.COLORS)
         dimensions = {"track": (224, 38), "thumb": (112, 36), "hover": (106, 30), "focus": (224, 38)}
         for name in names:
             source = tk.PhotoImage(master=self, file=str(directory / f"{name}.png"))
@@ -84,8 +86,9 @@ class ViewSwitcher(tk.Canvas):
         self.thumb_image = self.create_image(0, self.ui.px(1), image=self.photos["thumb"], anchor="nw")
         self.labels, self.icons = [], []
         for _identifier, label, kind in self.items:
-            self.icons.append(self.create_image(0, self.ui.px(19),
-                                               image=self.photos[f"{kind}-idle"], anchor="w"))
+            if self.show_icons:
+                self.icons.append(self.create_image(0, self.ui.px(19),
+                                                   image=self.photos[f"{kind}-idle"], anchor="w"))
             self.labels.append(self.create_text(0, self.ui.px(19), text=label, anchor="w",
                                                  font=self.fonts["idle"], fill=self.COLORS["idle"]))
         self.focus_image = self.create_image(0, 0, image=self.photos["focus"], anchor="nw", state="hidden")
@@ -105,12 +108,14 @@ class ViewSwitcher(tk.Canvas):
         for index, (identifier, label, kind) in enumerate(self.items):
             state = states[index]
             font = self.fonts["active" if identifier == self.selected else "idle"]
-            group_width = self.ui.px(self.ICON_SIZE + 8) + font.measure(label)
+            icon_space = self.ui.px(self.ICON_SIZE + 8) if self.show_icons else 0
+            group_width = icon_space + font.measure(label)
             center = self.ui.px(self.PADDING + self.cell_width / 2 + index * (self.cell_width + self.GAP))
             x = center - group_width / 2
-            self.coords(self.icons[index], x, self.ui.px(19))
-            self.coords(self.labels[index], x + self.ui.px(self.ICON_SIZE + 8), self.ui.px(19))
-            self.itemconfigure(self.icons[index], image=self.photos[f"{kind}-{state}"])
+            if self.show_icons:
+                self.coords(self.icons[index], x, self.ui.px(19))
+                self.itemconfigure(self.icons[index], image=self.photos[f"{kind}-{state}"])
+            self.coords(self.labels[index], x + icon_space, self.ui.px(19))
             self.itemconfigure(self.labels[index], font=font, fill=self.COLORS[state])
         visible_hover = self.hover is not None and self.items[self.hover][0] != self.selected
         self.itemconfigure(self.hover_image, state="normal" if visible_hover else "hidden")

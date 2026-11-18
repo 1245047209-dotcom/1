@@ -2,144 +2,244 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 import queue
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from receiver_scan import scan_receivers
+from app_dialogs import BG, WHITE, TEXT, MUTED, LINE, SOFT, FONT, Button, rounded
 from bluetooth_devices import scan_bluetooth
+from receiver_scan import scan_receivers
+from refresh_button import RefreshButton
+from search_window import bind_window_drag, place_bottom_right
 from toggle_switch import Switch
+from ui_scale import UIScale
+from view_switcher import ViewSwitcher
+
+
+WIDTH, HEIGHT = 864, 548
+SUBTITLES = {
+    "usb": "查找已插入电脑的 2.4G / USB 接收器。",
+    "bluetooth": "显示 Windows 已配对的蓝牙设备，支持上报时显示电量。",
+}
+SEARCH_MESSAGES = {
+    "usb": "正在扫描 USB 接收器…",
+    "bluetooth": "正在读取已配对蓝牙设备…",
+}
+
+
+class SearchRefreshButton(RefreshButton):
+    LABELS = {**RefreshButton.LABELS, "idle": "重新搜索", "loading": "搜索中"}
+
+
+def search_card(parent, *, height=1):
+    """Match the white cards and subtle borders of the main window."""
+    canvas = tk.Canvas(parent, bg=BG, height=height, highlightthickness=0, bd=0)
+    inner = tk.Frame(canvas, bg=WHITE)
+    content = canvas.create_window(16, 12, anchor="nw", window=inner)
+
+    def resize(event):
+        width, height = event.width, event.height
+        if width <= 32 or height <= 24:
+            return
+        canvas.delete("surface")
+        rounded(canvas, 1, 3, width - 1, height - 1, 17, fill="#e9ebf3", outline="", tags="surface")
+        rounded(canvas, 1, 1, width - 1, height - 4, 17, fill=WHITE, outline=LINE, tags="surface")
+        canvas.tag_lower("surface", content)
+        canvas.itemconfigure(content, width=width - 32, height=height - 25)
+
+    canvas.bind("<Configure>", resize)
+    return canvas, inner
+
+
+def configure_search_styles(window):
+    style = ttk.Style(window)
+    style.layout("Receiver.Treeview", [("Treeview.treearea", {"sticky": "nsew"})])
+    style.configure("Receiver.Treeview", rowheight=31, font=(FONT, -12), borderwidth=0,
+                    background=WHITE, fieldbackground=WHITE, foreground=TEXT)
+    style.map("Receiver.Treeview", background=[("selected", "#eeedfc")],
+              foreground=[("selected", "#3e3a93")])
+    # The native Windows heading ignores background colors. Use a local
+    # heading element so other tables and dialogs keep their existing theme.
+    element = "Receiver.heading.border"
+    if element not in style.element_names():
+        style.element_create(element, "from", "clam", "Treeheading.border")
+    style.layout("Receiver.Treeview.Heading", [(element, {"sticky": "nsew", "children": [
+        ("Treeheading.padding", {"sticky": "nsew", "children": [
+            ("Treeheading.text", {"sticky": "w"}),
+        ]}),
+    ]})])
+    style.configure("Receiver.Treeview.Heading", background=SOFT, foreground=MUTED,
+                    borderwidth=0, relief="flat", padding=(5, 8), font=(FONT, -11, "bold"))
 
 
 class ReceiverSearch:
     def __init__(self, parent, *, on_add=None, is_added=None):
         self.on_add = on_add
         self.is_added = is_added or (lambda _: False)
-        self.window = tk.Toplevel(parent)
-        win = self.window
+        win = self.window = tk.Toplevel(parent)
+        win.withdraw()
         win.title("Nexus · 搜索设备")
-        win.geometry("980x660")
-        win.minsize(820, 620)
-        win.configure(bg="#f3f4f6")
+        win.configure(bg=BG)
         win.transient(parent)
+        win.resizable(False, False)
+        self.ui = getattr(parent, "_nexus_ui", None) or UIScale(parent)
         self.results = queue.Queue()
         self.devices = []
         self.busy = False
+        self.scanning_mode = None
         self.closed = False
         self.timer = None
         win.protocol("WM_DELETE_WINDOW", self.close)
         win.bind("<Escape>", lambda _: self.close())
         win.bind("<F5>", lambda _: self.search())
-        style = ttk.Style(win)
-        style.configure("Receiver.Treeview", rowheight=34, font=("Microsoft YaHei UI", 10))
-        style.configure("Receiver.Treeview.Heading", font=("Microsoft YaHei UI", 9, "bold"))
+        configure_search_styles(win)
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(1, weight=1)
 
-        header = tk.Frame(win, bg="#f3f4f6")
-        header.pack(fill="x", padx=22, pady=(20, 8))
-        tk.Label(header, text="搜索设备", bg="#f3f4f6", fg="#292c32",
-                 font=("Microsoft YaHei UI", 17, "bold")).pack(side="left")
-        self.search_button = ttk.Button(header, text="重新搜索", command=self.search)
-        self.search_button.pack(side="right")
-        self.subtitle = tk.Label(win, text="查找已插入电脑的无线接收器，显示型号与硬件 ID。",
-                                 bg="#f3f4f6", fg="#6e747e", font=("Microsoft YaHei UI", 10))
-        self.subtitle.pack(anchor="w", padx=22)
-        modes = tk.Frame(win, bg="#f3f4f6")
-        modes.pack(fill="x", padx=22, pady=(10, 0))
-        self.mode = tk.StringVar(value="usb")
-        for text, value in (("2.4G / USB 接收器", "usb"), ("蓝牙设备", "bluetooth")):
-            ttk.Radiobutton(modes, text=text, variable=self.mode, value=value,
-                            command=self.change_mode).pack(side="left", padx=(0, 22))
-        options = tk.Frame(win, bg="#f3f4f6")
-        options.pack(fill="x", padx=22, pady=12)
-        self.status = tk.StringVar(value="准备搜索…")
-        tk.Label(options, textvariable=self.status, bg="#f3f4f6", fg="#4a5059",
-                 font=("Microsoft YaHei UI", 9)).pack(side="left")
-        self.show_other = tk.BooleanVar(value=False)
-        self.other_option = tk.Frame(options, bg="#f3f4f6")
+        header = tk.Frame(win, bg=BG)
+        header.grid(row=0, column=0, sticky="ew", padx=22, pady=(16, 12))
+        self.brand_photo = tk.PhotoImage(master=win, file=str(Path(__file__).with_name("assets") / "nexus-window-32.png"))
+        brand = tk.Label(header, image=self.brand_photo, bg=BG, bd=0)
+        brand.pack(side="left", padx=(0, 12))
+        heading = tk.Frame(header, bg=BG)
+        heading.pack(side="left", fill="x", expand=True)
+        title = tk.Label(heading, text="搜索设备", bg=BG, fg=TEXT, font=(FONT, -21, "bold"), bd=0)
+        title.pack(anchor="w")
+        self.subtitle = tk.Label(heading, text=SUBTITLES["usb"], bg=BG, fg=MUTED, font=(FONT, -12), bd=0)
+        self.subtitle.pack(anchor="w", pady=(2, 0))
+        self.search_button = SearchRefreshButton(header, self.search, ui=self.ui)
+        self.search_button.configure(bg=BG)
+        self.search_button.pack(side="right", padx=(12, 0))
+        bind_window_drag(win, header, brand, heading, title, self.subtitle)
+
+        card, results = search_card(win)
+        card.grid(row=1, column=0, sticky="nsew", padx=20)
+        toolbar = tk.Frame(results, bg=WHITE)
+        toolbar.pack(fill="x", pady=(0, 9))
+        self.mode = tk.StringVar(master=win, value="usb")
+        self.mode_tabs = ViewSwitcher(toolbar, ui=self.ui, command=self.change_mode, show_icons=False)
+        self.mode_tabs.set_items((("usb", "2.4G / USB", ""), ("bluetooth", "蓝牙设备", "")), "usb")
+        self.mode_tabs.pack(side="left")
+        self.status = tk.StringVar(master=win, value="准备搜索…")
+        tk.Label(toolbar, textvariable=self.status, bg=WHITE, fg=MUTED,
+                 font=(FONT, -12), anchor="w").pack(side="left", fill="x", expand=True, padx=12)
+        self.show_other = tk.BooleanVar(master=win, value=False)
+        self.other_option = tk.Frame(toolbar, bg=WHITE)
         self.other_option.pack(side="right")
-        self.other_switch = Switch(self.other_option, self.show_other, command=self.render)
+        self.other_switch = Switch(self.other_option, self.show_other, scale=self.ui.factor, command=self.render)
         self.other_switch.pack(side="right")
-        other_label = tk.Label(self.other_option, text="显示无线类型待确认的 USB 外设", bg="#f3f4f6",
-                               fg="#292c32", font=("Microsoft YaHei UI", 9), cursor="hand2")
+        other_label = tk.Label(self.other_option, text="显示待确认的 USB 外设",
+                               bg=WHITE, fg=TEXT, font=(FONT, -12), cursor="hand2")
         other_label.pack(side="right", padx=(0, 8))
         other_label.bind("<Button-1>", lambda _: self.other_switch.invoke())
-        table_frame = tk.Frame(win, bg="#fff")
-        table_frame.pack(fill="both", expand=True, padx=22)
+        table_frame = tk.Frame(results, bg=WHITE)
+        table_frame.pack(fill="both", expand=True)
         columns = ("model", "maker", "id", "type", "state", "level")
         self.table = ttk.Treeview(table_frame, columns=columns, show="headings",
                                   selectmode="browse", height=5, style="Receiver.Treeview")
-        for column, title, width in zip(columns, ("型号 / 系统名称", "厂商", "硬件 ID / 蓝牙地址", "设备类型", "连接状态", "电量"), (250, 95, 155, 90, 105, 75)):
-            self.table.heading(column, text=title)
-            self.table.column(column, width=width, minwidth=65 if column in ("type", "level") else 85,
-                              stretch=column in ("model", "id"))
+        column_headers = ("型号 / 系统名称", "厂商", "硬件 ID / 蓝牙地址", "设备类型", "连接状态", "电量")
+        for column, label, width in zip(columns, column_headers, (225, 95, 150, 84, 99, 65)):
+            align = "center" if column in ("type", "state", "level") else "w"
+            self.table.heading(column, text=label, anchor=align)
+            self.table.column(column, width=width, minwidth=min(90, width),
+                              stretch=column in ("model", "id"), anchor=align)
+        self.table.tag_configure("alternate", background="#f8f8fc")
         scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.table.yview)
         self.table.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.table.pack(fill="both", expand=True)
         self.table.bind("<<TreeviewSelect>>", self.selection_changed)
+        self.empty_label = tk.Label(table_frame, bg=WHITE, fg=MUTED, font=(FONT, -13))
+
+        info_card, details = search_card(win, height=160)
+        info_card.grid(row=2, column=0, sticky="ew", padx=20, pady=(10, 0))
+        info_header = tk.Frame(details, bg=WHITE, height=24)
+        info_header.pack(fill="x")
+        info_header.pack_propagate(False)
+        tk.Label(info_header, text="设备详情", bg=WHITE, fg=TEXT,
+                 font=(FONT, -14, "bold"), bd=0).pack(side="left")
         from aula_catalog import catalog
         self.aula_models = {m["model"]: m for m in catalog()["models"]}
-        model_row = tk.Frame(win, bg="#f3f4f6")
-        model_row.pack(fill="x", padx=22, pady=(8, 0))
-        tk.Label(model_row, text="狼蛛型号", bg="#f3f4f6", fg="#4a5059", font=("Microsoft YaHei UI", 9)).pack(side="left")
-        self.aula_choice = tk.StringVar(value="自动识别")
-        self.aula_combo = ttk.Combobox(model_row, textvariable=self.aula_choice, state="disabled",
-                                       values=["自动识别"] + list(self.aula_models), width=19)
-        self.aula_combo.pack(side="left", padx=(8, 18))
+        self.model_row = tk.Frame(info_header, bg=WHITE)
+        tk.Label(self.model_row, text="狼蛛型号", bg=WHITE, fg=MUTED, font=(FONT, -11)).pack(side="left")
+        self.aula_choice = tk.StringVar(master=win, value="自动识别")
+        self.aula_combo = ttk.Combobox(self.model_row, textvariable=self.aula_choice, state="disabled",
+                                       values=["自动识别"] + list(self.aula_models), width=18, font=(FONT, -12))
+        self.aula_combo.pack(side="left", padx=(7, 15))
         self.aula_combo.bind("<<ComboboxSelected>>", self.choose_aula_model)
-        tk.Label(model_row, text="产品图配色", bg="#f3f4f6", fg="#4a5059", font=("Microsoft YaHei UI", 9)).pack(side="left")
-        self.variant_choice = tk.StringVar(value="官网配色 1")
-        self.variant_combo = ttk.Combobox(model_row, textvariable=self.variant_choice, state="disabled", width=12)
-        self.variant_combo.pack(side="left", padx=(8, 0))
+        tk.Label(self.model_row, text="产品图配色", bg=WHITE, fg=MUTED, font=(FONT, -11)).pack(side="left")
+        self.variant_choice = tk.StringVar(master=win)
+        self.variant_combo = ttk.Combobox(self.model_row, textvariable=self.variant_choice, state="disabled",
+                                          width=12, font=(FONT, -12))
+        self.variant_combo.pack(side="left", padx=(7, 0))
         self.variant_combo.bind("<<ComboboxSelected>>", self.choose_aula_variant)
-        tk.Label(model_row, text="名称不明确时按实物选择", bg="#f3f4f6", fg="#7e8590", font=("Microsoft YaHei UI", 8)).pack(side="left", padx=12)
-        details_frame = tk.Frame(win, bg="#fff")
-        details_frame.pack(fill="both", padx=22, pady=(12, 8))
-        self.detail = tk.Text(details_frame, height=6, wrap="word", font=("Microsoft YaHei UI", 9),
-                              bg="#fff", fg="#454c55", relief="flat", padx=12, pady=9)
+        details_frame = tk.Frame(details, bg=SOFT)
+        details_frame.pack(fill="both", expand=True, pady=(8, 0))
+        self.detail = tk.Text(details_frame, height=1, wrap="word", font=(FONT, -12), bg=SOFT, fg=TEXT,
+                              relief="flat", highlightthickness=0, padx=10, pady=8, spacing3=2)
         detail_scroll = ttk.Scrollbar(details_frame, orient="vertical", command=self.detail.yview)
         self.detail.configure(yscrollcommand=detail_scroll.set)
         detail_scroll.pack(side="right", fill="y")
         self.detail.pack(side="left", fill="both", expand=True)
-        self.set_detail("搜索后，选中一行查看识别依据和设备名称。")
-        tk.Label(win, text="蓝牙列表显示 Windows 已配对设备；只有已连接且上报电量的设备显示百分比。",
-                 font=("Microsoft YaHei UI", 8), bg="#f3f4f6", fg="#7e8590").pack(anchor="w", padx=22, pady=(0, 8))
-        footer = tk.Frame(win, bg="#f3f4f6")
-        footer.pack(fill="x", padx=22, pady=(0, 16))
-        tk.Label(footer, text="选中外设后，点击“加入设备”保存到主面板。",
-                 font=("Microsoft YaHei UI", 9), bg="#f3f4f6", fg="#6e747e").pack(side="left")
-        self.add_button = ttk.Button(footer, text="加入设备", command=self.add_selected, state="disabled")
+        footer = tk.Frame(win, bg=BG)
+        footer.grid(row=3, column=0, sticky="ew", padx=22, pady=(13, 16))
+        self.add_button = Button(footer, "加入设备", self.add_selected, scale=self.ui.factor,
+                                 width=138, height=40, primary=True)
         self.add_button.pack(side="right", padx=(10, 0))
-        self.copy_button = ttk.Button(footer, text="复制设备信息", command=self.copy, state="disabled")
+        self.copy_button = Button(footer, "复制设备信息", self.copy, scale=self.ui.factor, width=120, height=40)
         self.copy_button.pack(side="right")
+        place_bottom_right(win, parent, WIDTH, HEIGHT)
+        self.mode_tabs.focus_set()
         self.timer = win.after(100, self.pump)
         self.search()
 
-    def change_mode(self):
-        if self.mode.get() == "bluetooth":
+    def change_mode(self, mode=None):
+        if mode is not None:
+            if mode == self.mode.get():
+                return
+            self.mode.set(mode)
+        mode = self.mode.get()
+        self.mode_tabs.set_selected(mode)
+        if mode == "bluetooth":
             self.other_option.pack_forget()
-            self.subtitle.configure(text="显示 Windows 已配对的蓝牙外设；未配对设备请先在系统设置中完成配对。")
         else:
             self.other_option.pack(side="right")
-            self.subtitle.configure(text="查找已插入电脑的无线接收器，显示型号与硬件 ID。")
-        self.table.delete(*self.table.get_children())
+        self.subtitle.configure(text=SUBTITLES[mode])
+        if self.busy:
+            message = SEARCH_MESSAGES[mode] if self.scanning_mode == mode else "等待开始搜索…"
+            self.clear_results(message)
+        else:
+            self.search()
+
+    def clear_selection(self):
+        self.model_row.pack_forget()
+        self.aula_combo.configure(state="disabled")
+        self.variant_combo.configure(state="disabled")
         self.copy_button.configure(state="disabled")
-        self.add_button.configure(state="disabled")
-        self.search()
+        self.add_button.configure(state="disabled", text="加入设备")
+
+    def clear_results(self, message):
+        self.table.delete(*self.table.get_children())
+        self.clear_selection()
+        self.status.set(message)
+        self.show_placeholder("正在查找设备", "找到设备后，选中一行查看详情。")
+
+    def show_placeholder(self, title, detail):
+        self.empty_label.configure(text=title)
+        self.empty_label.place(relx=.5, rely=.58, anchor="center")
+        self.set_detail(detail)
 
     def search(self):
         if self.busy or self.closed:
             return
         self.busy = True
         mode = self.mode.get()
+        self.scanning_mode = mode
         self.devices = []
-        self.table.delete(*self.table.get_children())
-        self.copy_button.configure(state="disabled")
-        self.add_button.configure(state="disabled", text="加入设备")
-        self.search_button.configure(state="disabled", text="搜索中…")
-        self.status.set("正在读取已配对蓝牙设备…" if mode == "bluetooth" else "正在扫描 USB 接收器…")
-        self.set_detail("正在读取 Windows 设备名称，请稍候…")
+        self.search_button.set_state("loading")
+        self.clear_results(SEARCH_MESSAGES[mode])
 
         def worker():
             try:
@@ -162,15 +262,16 @@ class ReceiverSearch:
             pass
         else:
             self.busy = False
+            self.scanning_mode = None
             if mode != self.mode.get():
                 self.search()
                 self.timer = self.window.after(100, self.pump)
                 return
-            self.search_button.configure(state="normal", text="重新搜索")
+            self.search_button.set_state("error" if error else "idle")
             self.devices = devices
             if error:
                 self.status.set("搜索失败，可点击重新搜索")
-                self.set_detail("无法读取设备列表：" + error)
+                self.show_placeholder("搜索失败", "无法读取设备列表：" + error)
             else:
                 self.render()
         self.timer = self.window.after(100, self.pump)
@@ -178,31 +279,40 @@ class ReceiverSearch:
     def render(self):
         if self.busy:
             return
+        selected = self.table.selection()
         self.table.delete(*self.table.get_children())
         bluetooth = self.mode.get() == "bluetooth"
         visible = [i for i, d in enumerate(self.devices) if bluetooth or d.wireless or self.show_other.get()]
-        count = sum(d.wireless for d in self.devices)
-        self.status.set(f"找到 {len(visible)} 台已配对蓝牙设备 · {sum(d.connected is True for d in self.devices)} 台已连接" if bluetooth
-                        else f"找到 {count} 个无线接收器 / 外设 · 当前显示 {len(visible)} 个")
-        for index in visible:
+        if bluetooth:
+            connected_count = sum(device.connected is True for device in self.devices)
+            self.status.set(f"{len(visible)} 台已配对 · {connected_count} 台已连接")
+        else:
+            self.status.set(f"显示 {len(visible)} 个 USB 设备" if self.show_other.get()
+                            else f"找到 {len(visible)} 个无线接收器 / 外设")
+        for row, index in enumerate(visible):
             d = self.devices[index]
             connected = getattr(d, "connected", None)
-            state = ("已连接" if connected is True else "未连接" if connected is False else "状态未知") if bluetooth else "接收器在"
+            state = ("已连接" if connected is True else "未连接" if connected is False else "状态未知") if bluetooth else "已检测"
             battery = getattr(d, "battery", None)
             level = f"{battery}%" if connected is True and battery is not None else "--"
-            self.table.insert("", "end", iid=str(index), values=(d.model, d.manufacturer, d.hardware_id, d.category, state, level))
+            self.table.insert("", "end", iid=str(index),
+                              values=(d.model, d.manufacturer, d.hardware_id, d.category, state, level),
+                              tags=("alternate",) if row % 2 else ())
         if visible:
-            first = str(visible[0])
-            self.table.selection_set(first)
-            self.table.focus(first)
+            self.empty_label.place_forget()
+            current = selected[0] if selected and self.table.exists(selected[0]) else str(visible[0])
+            self.table.selection_set(current)
+            self.table.focus(current)
+            self.table.see(current)
             self.selection_changed()
         else:
-            self.copy_button.configure(state="disabled")
-            self.add_button.configure(state="disabled", text="加入设备")
-            self.set_detail("未找到已配对蓝牙设备，请先在 Windows 蓝牙设置中完成配对，再点击“重新搜索”。" if bluetooth else
-                            "未找到名称明确的无线接收器。\n请插入接收器后点击“重新搜索”；"
-                            "也可打开上方开关，查看无法确认无线类型的 USB 外设。\n"
-                            "蓝牙设备、内置触控板和虚拟输入设备不在此列表内。")
+            self.clear_selection()
+            if bluetooth:
+                self.show_placeholder("未找到已配对的蓝牙设备",
+                                      "请先在 Windows 蓝牙设置中完成配对，再点击“重新搜索”。")
+            else:
+                self.show_placeholder("未找到可显示的 USB 设备",
+                                      "请插入接收器后重新搜索，也可开启“显示待确认的 USB 外设”。")
 
     def selection_changed(self, _event=None):
         selected = self.table.selection()
@@ -214,6 +324,10 @@ class ReceiverSearch:
         eligible = (getattr(device, "transport", "usb") == "usb" and
                     (model is not None or device.hardware_id.upper() in ("3554:FA09", "258A:010C", "0C45:FEFE", "0C45:FEF9", "38A6:2908")
                      or device.manufacturer.casefold() == "aula"))
+        if eligible:
+            self.model_row.pack(side="right")
+        else:
+            self.model_row.pack_forget()
         self.aula_combo.configure(state="readonly" if eligible else "disabled")
         self.aula_choice.set(model["model"] if model else "自动识别")
         from aula_protocols import legacy_default

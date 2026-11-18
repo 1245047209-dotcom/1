@@ -35,6 +35,11 @@ python (Join-Path $PSScriptRoot 'gui_smoke.py') $testRoot
 if ($LASTEXITCODE -ne 0) { throw 'GUI smoke check failed' }
 python (Join-Path $PSScriptRoot 'staged_scene_smoke.py') $testRoot
 if ($LASTEXITCODE -ne 0) { throw 'Staged scene/cancellation check failed' }
+& (Join-Path $testRoot 'runtime/python.exe') -I -B -X utf8 (Join-Path $PSScriptRoot 'smoke_search_dialog.py') $testRoot $testRoot
+if ($LASTEXITCODE -ne 0) { throw 'Search dialog smoke check failed' }
+& (Join-Path $testRoot 'runtime/python.exe') -I -B -X utf8 (Join-Path $PSScriptRoot 'smoke_settings.py') $testRoot $testRoot
+if ($LASTEXITCODE -ne 0) { throw 'Settings dialog smoke check failed' }
+
 $unexpected = Get-ChildItem -LiteralPath $payload -File | Where-Object {
     ($_.Extension -eq '.json' -and $_.Name -ne 'SOURCE_MANIFEST.json') -or $_.Name -eq 'tray_pid.txt' -or $_.Extension -in @('.log','.lock')
 }

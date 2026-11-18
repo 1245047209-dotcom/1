@@ -18,15 +18,15 @@ from low_battery_alert import LowBatteryNotifier
 from saved_devices import DeviceStore, DeviceStoreError, DEFAULT_DEVICE_ID, read_saved_device
 from device_layout import read_device_batch, card_rectangles
 
-BG = "#f3f4f6"
+BG = "#f4f5f8"
 CARD = "#ffffff"
-TEXT = "#292c32"
-MUTED = "#667384"
-GREEN = "#20c878"
-GREEN_SOFT = "#e7f7ed"
-BLACK = "#17191d"
-ORANGE = "#efad46"
-BORDER = "#e9ebee"
+TEXT = "#202536"
+MUTED = "#798294"
+GREEN = "#5755d9"
+GREEN_SOFT = "#eeedfc"
+BLACK = "#25283b"
+ORANGE = "#848b9d"
+BORDER = "#e8eaf1"
 FONT = "Microsoft YaHei UI"
 UI_SCALE = .85
 LAYOUT_WIDTH, LAYOUT_HEIGHT = 1120, 650
@@ -637,9 +637,9 @@ class NexusPanel:
         active = hint.startswith("使用中")
         prefix, detail = (hint[:3], hint[3:]) if active else (hint, "")
         self.canvas.itemconfigure(self.runtime_hint_item, text=prefix,
-                                  fill="#0f8e55" if active else MUTED)
+                                  fill="#5755d9" if active else MUTED)
         self.transition.update_style(self.canvas, self.runtime_hint_item,
-                                     fill="#0f8e55" if active else MUTED)
+                                     fill="#5755d9" if active else MUTED)
         self.canvas.itemconfigure(self.runtime_hint_detail_item, text=detail)
         bounds = self.canvas.bbox(self.runtime_hint_item)
         x, y = self.canvas.coords(self.runtime_hint_item)
@@ -774,7 +774,7 @@ class NexusPanel:
         elif reading.error:
             state, color = ("读取暂不可用", "#aa5d65") if online else ("未连接", MUTED)
         elif reading.ok or known_parts:
-            state, color = component_charging_text(reading.components) or reading.status or "设备在线", "#0f8e55"
+            state, color = component_charging_text(reading.components) or reading.status or "设备在线", "#5755d9"
         elif reading.status in ("待适配电量", "未上报电量"):
             state, color = reading.status, "#997126"
         else:
@@ -804,7 +804,7 @@ class NexusPanel:
         values = {
             "badge_bg": {"fill": GREEN_SOFT if online else "#f0f1f3"},
             "badge": {"text": "已连接" if online else "未连接" if reading.error else "读取中",
-                      "fill": "#0f8e55" if online else MUTED},
+                      "fill": "#5755d9" if online else MUTED},
             "state": {"text": "●  " + state, "fill": color},
             "status": {"text": state, "fill": color},
             "status_dot": {"fill": color},
@@ -812,14 +812,14 @@ class NexusPanel:
             "power": {"text": power, "fill": TEXT},
             "caption": {"text": caption, "fill": MUTED},
             "timestamp": {"text": self.reading_times.label(key, reading), "fill": MUTED},
-            "runtime": {"fill": "#0f8e55" if reading.ok else MUTED},
+            "runtime": {"fill": "#5755d9" if reading.ok else MUTED},
             "detail": {"text": reading.error or reading.detail or "等待设备电量回复", "fill": MUTED},
         }
         for part in ("left", "right", "case"):
             value = ((reading.components or {}).get(part) or {}) if not reading.error else {}
             level = value.get("level")
             values[part+"_level"] = {"text": f"{level}%" if level is not None else "--",
-                                     "fill": "#0f8e55" if value.get("charging") is True else TEXT if level is not None else MUTED}
+                                     "fill": "#5755d9" if value.get("charging") is True else TEXT if level is not None else MUTED}
             values[part+"_time"] = {"text": self.reading_times.label(key, reading, part), "fill": MUTED}
         return values
 
@@ -839,7 +839,7 @@ class NexusPanel:
                 label = "状态未知"
         return {"badge_bg": {"fill": GREEN_SOFT if online else "#f0f1f3"},
                 "dot": {"fill": GREEN if online else MUTED},
-                "badge": {"text": label, "fill": "#0f8e55" if online else MUTED}}
+                "badge": {"text": label, "fill": "#5755d9" if online else MUTED}}
 
     def refresh_readings(self):
         if not getattr(self, "live", None) or not self.live.bindings:
@@ -1008,7 +1008,9 @@ class NexusPanel:
         yield
         panel_x1, panel_y1, panel_x2, panel_y2 = card_x1 + 16, card_y1 + 12, card_x1 + 278, card_y2 - 10
         rounded_rect(self.canvas, panel_x1, panel_y1, panel_x2, panel_y2, 18,
-                     "#fbfbfc", tags="shape")
+                     "#f7f8fc", tags="shape")
+        rounded_rect(self.canvas, panel_x2 + 20, card_y1 + 24, card_x2 - 20, card_y2 - 66,
+                     22, "#fafafe", tags="shape")
         yield
         body_before = set(self.canvas.find_all())
         yield
@@ -1042,17 +1044,17 @@ class NexusPanel:
             self.live_components(self.canvas, key, panel_x1 + 27, panel_y1 + 137, self.reading, size=12)
             yield
         else:
-            self.live_battery(self.canvas, key, "battery", panel_x1 + 27, panel_y1 + 128, shown_level, charging)
+            self.live_battery(self.canvas, key, "battery", panel_x1 + 24, panel_y1 + 147, shown_level, charging)
             yield
-            self.live_text(self.canvas, key, "level", panel_x1 + 68, panel_y1 + 137,
-                             anchor="w", font=(FONT, 10, "bold"), tags="shape", **styles["level"])
+            self.live_text(self.canvas, key, "level", panel_x1 + 72, panel_y1 + 155,
+                             anchor="w", font=("Segoe UI", 26, "bold"), tags="shape", **styles["level"])
             yield
         self.runtime_text_item = self.runtime_hint_item = self.runtime_hint_detail_item = None
         if key == DEFAULT_DEVICE_ID:
-            self.canvas.create_text(panel_x1 + 27, panel_y1 + 165, text="预计剩余使用时长",
+            self.canvas.create_text(panel_x1 + 27, panel_y1 + 202, text="预计剩余使用时长",
                                      anchor="w", fill=MUTED, font=(FONT, 10), tags="shape")
             yield
-            self.runtime_text_item = self.live_text(self.canvas, key, "runtime", panel_x1 + 27, panel_y1 + 190,
+            self.runtime_text_item = self.live_text(self.canvas, key, "runtime", panel_x1 + 27, panel_y1 + 225,
                                                      anchor="w", font=(FONT, 11, "bold"), tags="shape", **styles["runtime"])
             yield
             self.runtime_hint_item = self.canvas.create_text(panel_x2 + 24, panel_y2 - 18,
@@ -1065,7 +1067,7 @@ class NexusPanel:
             yield
 
         # 跟随上方设备信息定位，避免窗口增高时被推到卡片底部。
-        details_y = panel_y1 + (281 if component_layout else 230 if key == DEFAULT_DEVICE_ID else 190)
+        details_y = panel_y1 + (281 if component_layout else 270 if key == DEFAULT_DEVICE_ID else 220)
         self.canvas.create_text(panel_x1 + 27, details_y, text="连接方式",
                                anchor="w", fill=MUTED, font=(FONT, 10), tags="shape")
         yield
@@ -1318,12 +1320,16 @@ class NexusPanel:
             self.live_text(canvas, device_id, "badge", x2 - 67, y1 + 34,
                              font=(FONT, 9, "bold"), **styles["badge"])
             yield
-            image_width, image_height = card_width * .40, card_height - 164
-            image_center_x, image_center_y = x1 + card_width * .23, y1 + 100 + image_height / 2
+            # 横向产品舞台与底部数据区各自占用固定区域。
+            image_width, image_height = card_width - 70, 112
+            image_center_x, image_center_y = (x1 + x2) / 2, y1 + 160
             kind = product_kind(device)
+            if not compact and kind == "keyboard":
+                image_width, image_height = min(card_width - 360, 620), 260
+                image_center_x, image_center_y = x1 + card_width * .58, y1 + 205
             yield
             photo = self.fitted_product(product_image_kind(device), image_width, image_height,
-                                        clockwise=kind == "keyboard") if kind else None
+                                        clockwise=False) if kind else None
             if photo:
                 canvas.create_image(image_center_x, image_center_y, image=photo)
                 yield
@@ -1336,40 +1342,45 @@ class NexusPanel:
                 yield
                 canvas.create_text(image_center_x, image_center_y, text="USB", fill="#8e97a4", font=(FONT, 15, "bold"))
                 yield
-            mx, my = x1 + card_width * .47, y1 + 118
-            canvas.create_text(mx, my, text="设备电量", anchor="w", fill=MUTED, font=(FONT, 10))
-            yield
+            mx, my = x1 + 24, y1 + 252
             charging = not reading.error and reading.status in ("charging", "充电中")
             if kind == "beats-studio-buds":
-                self.live_components(canvas, device_id, mx, my + 28, reading)
-                yield
-                status_offset, connection_y = 166, 204
+                column_width = (card_width - 48) / 3
+                for index, (part, label) in enumerate((("left", "左耳"), ("right", "右耳"), ("case", "充电仓"))):
+                    px = mx + index * column_width
+                    value = ((reading.components or {}).get(part) or {}) if not reading.error else {}
+                    canvas.create_text(px, my, text=label, anchor="w", fill=MUTED, font=(FONT, 9))
+                    self.live_text(canvas, device_id, part + "_level", px + 38, my + 34,
+                                   anchor="w", font=("Segoe UI", 16, "bold"), **styles[part + "_level"])
+                    self.live_battery(canvas, device_id, part + "_battery", px, my + 25,
+                                      value.get("level"), value.get("charging") is True)
+                    self.live_text(canvas, device_id, part + "_time", px, my + 82,
+                                   anchor="w", font=(FONT, 8), **styles[part + "_time"])
+                    yield
             else:
-                self.live_battery(canvas, device_id, "battery", mx, my + 30,
-                                    reading.level if not reading.error else None, charging)
+                canvas.create_text(mx, my, text="剩余电量", anchor="w", fill=MUTED, font=(FONT, 10))
+                self.live_text(canvas, device_id, "level", mx + 48, my + 39,
+                               anchor="w", font=("Segoe UI", 26, "bold"), **styles["level"])
+                self.live_battery(canvas, device_id, "battery", mx, my + 31,
+                                  reading.level if not reading.error else None, charging)
+                self.live_text(canvas, device_id, "state", mx, my + 82,
+                               anchor="w", font=(FONT, 9), **styles["state"])
                 yield
-                self.live_text(canvas, device_id, "level", mx + 40, my + 41,
-                                 anchor="w", font=(FONT, 20, "bold"), **styles["level"])
-                yield
-                status_offset, connection_y = 80, 133
-            self.live_text(canvas, device_id, "state", mx, my + status_offset,
-                             anchor="w", font=(FONT, 10), **styles["state"])
-            yield
-            canvas.create_text(mx, my + connection_y, text="连接方式", anchor="w", fill=MUTED, font=(FONT, 10))
-            yield
-            connection = connection_text(device)
-            yield
-            canvas.create_text(mx, my + connection_y + 25, text=connection, anchor="w", fill=TEXT, font=(FONT, 11, "bold"))
+            info_y = y2 - 100
+            canvas.create_text(mx, info_y, text=connection_text(device), anchor="w",
+                               fill=TEXT, font=(FONT, 10, "bold"))
             yield
             if device_id == DEFAULT_DEVICE_ID:
-                canvas.create_text(mx, my + 201, text="预计剩余使用时长", anchor="w", fill=MUTED, font=(FONT, 10))
-                yield
                 self.overview_runtime_items[device_id] = self.live_text(
-                    canvas, device_id, "runtime", mx, my + 226, text="暂不可用", anchor="w",
-                    font=(FONT, 11, "bold"), **styles["runtime"])
+                    canvas, device_id, "runtime", x2 - 24, info_y, text="暂不可用", anchor="e",
+                    font=(FONT, 10), **styles["runtime"])
                 yield
-            self.live_text(canvas, device_id, "caption", mx, my + 263,
-                             anchor="w", font=(FONT, 10), **styles["caption"])
+            else:
+                self.live_text(canvas, device_id, "power", x2 - 24, info_y,
+                               anchor="e", font=(FONT, 9), **styles["power"])
+                yield
+            self.live_text(canvas, device_id, "caption", mx, y2 - 77,
+                             anchor="w", font=(FONT, 9), **styles["caption"])
             yield
             canvas.create_line(x1 + 24, y2 - 58, x2 - 24, y2 - 58, fill="#f0f1f4")
             yield

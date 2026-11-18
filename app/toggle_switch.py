@@ -8,10 +8,10 @@ import time
 import tkinter as tk
 import zlib
 
-ON = "#21ba79"
-OFF = "#dce3eb"
+ON = "#5755d9"
+OFF = "#dfe2eb"
 THUMB = "#ffffff"
-FOCUS = "#91b6df"
+FOCUS = "#b7b5f4"
 
 
 def _rgb(color):

@@ -5,13 +5,13 @@ import tkinter as tk
 from tkinter import ttk
 from toggle_switch import Switch
 
-BG = "#eef1f5"
+BG = "#f4f5f8"
 WHITE = "#ffffff"
-TEXT = "#202832"
-MUTED = "#738091"
-LINE = "#e7ecf1"
-SOFT = "#f5f7fa"
-GREEN = "#21ba79"
+TEXT = "#202536"
+MUTED = "#798294"
+LINE = "#e8eaf1"
+SOFT = "#f6f6fb"
+GREEN = "#5755d9"
 FONT = "Microsoft YaHei UI"
 
 
@@ -73,12 +73,49 @@ class Button(tk.Canvas):
         self.delete("all")
         width = self.winfo_width() if self.winfo_width() > 1 else self.default_width
         height = self.winfo_height() if self.winfo_height() > 1 else self.default_height
-        fill = "#e7ebf0" if self.disabled else "#27313d" if self.primary and self.hover else TEXT if self.primary else "#edf1f6" if self.hover else SOFT
+        fill = "#e7ebf0" if self.disabled else "#4643c2" if self.primary and self.hover else GREEN if self.primary else "#eeedfc" if self.hover else SOFT
         color = "#a2acb8" if self.disabled else WHITE if self.primary else TEXT
         rounded(self, 1, 1, width-1, height-1, 9*self.scale, fill=fill,
                 outline="#91b6df" if self.focused else fill, width=1)
         self.create_text(width/2, height/2, text=self.text, fill=color,
                          font=(FONT, -round(14*self.scale), "bold" if self.primary else "normal"))
+
+
+class CloseButton(Button):
+    def __init__(self, master, command, *, scale=.85):
+        self.pressed = False
+        super().__init__(master, "", command, scale=scale, width=42, height=42)
+        self.bind("<ButtonPress-1>", self._press)
+        self.bind("<ButtonRelease-1>", self._release)
+
+    def _press(self, _event):
+        self.pressed = True
+        self.redraw()
+
+    def _release(self, event):
+        activate = self.pressed and 0 <= event.x < self.winfo_width() and 0 <= event.y < self.winfo_height()
+        self.pressed = False
+        if activate:
+            self.invoke()
+        else:
+            self.redraw()
+
+    def redraw(self):
+        self.delete("all")
+        width = max(self.default_width, self.winfo_width())
+        height = max(self.default_height, self.winfo_height())
+        cx, cy = width / 2, height / 2
+        radius = min(width, height) / 2 - 3
+        if self.focused:
+            self.create_oval(cx-radius-2, cy-radius-2, cx+radius+2, cy+radius+2,
+                             fill="", outline="#b7b5f4", width=1)
+        fill = "#e2e0ff" if self.pressed and self.hover else "#eeedfc" if self.hover else "#f4f5fa"
+        self.create_oval(cx-radius, cy-radius, cx+radius, cy+radius, fill=fill, outline=LINE)
+        color = GREEN if self.hover else "#505973"
+        arm = 5 * self.scale
+        for direction in (-1, 1):
+            self.create_line(cx-arm, cy-direction*arm, cx+arm, cy+direction*arm,
+                             fill=color, width=1.8*self.scale, capstyle=tk.ROUND)
 
 
 class Progress(tk.Canvas):
@@ -122,14 +159,14 @@ class OverlayDialog(tk.Canvas):
             root._nexus_dialog_escape = root.bind("<Escape>", escape, add="+")
         self.header = tk.Frame(self.inner, bg=WHITE)
         self.header.pack(fill="x", pady=(0, self.p(16)))
-        badge = tk.Label(self.header, text="N", bg="#e9f7f0", fg="#16885b", font=self.font(21, "bold"),
+        badge = tk.Label(self.header, text="N", bg="#eeedfc", fg="#5755d9", font=self.font(21, "bold"),
                          width=2, padx=self.p(3), pady=self.p(4))
         badge.pack(side="left", padx=(0, self.p(12)))
         heading = tk.Frame(self.header, bg=WHITE)
         heading.pack(side="left", fill="x", expand=True)
         tk.Label(heading, text=title, bg=WHITE, fg=TEXT, font=self.font(25, "bold")).pack(anchor="w")
         tk.Label(heading, text=subtitle, bg=WHITE, fg=MUTED, font=self.font(13)).pack(anchor="w", pady=(self.p(3), 0))
-        self.close_button = Button(self.header, "×", self.on_close, scale=self.scale, width=34, height=34)
+        self.close_button = CloseButton(self.header, self.on_close, scale=self.scale)
         self.close_button.pack(side="right", anchor="n")
         self.show()
 
@@ -159,7 +196,7 @@ class OverlayDialog(tk.Canvas):
         self.place(x=0, y=0, relwidth=1, relheight=1)
         tk.Misc.tkraise(self)
         self._layout()
-        self.close_button.focus_set() if hasattr(self, "close_button") else self.focus_set()
+        self.focus_set()
 
     def destroy(self):
         active = getattr(self.root, "_nexus_active_dialog", None)
@@ -188,10 +225,10 @@ def setting_row(dialog, master, title, description, *, height=64, bg=WHITE):
 def section_heading(dialog, master, title, subtitle, *, close=None):
     header = tk.Frame(master, bg=WHITE)
     header.pack(fill="x", pady=(0, dialog.p(18)))
-    tk.Label(header, text="N", bg="#e9f7f0", fg="#16885b", font=dialog.font(21, "bold"),
+    tk.Label(header, text="N", bg="#eeedfc", fg="#5755d9", font=dialog.font(21, "bold"),
              width=2, padx=dialog.p(3), pady=dialog.p(4)).pack(side="left", padx=(0, dialog.p(12)))
     if close is not None:
-        dialog.close_button = Button(header, "×", close, scale=dialog.scale, width=34, height=34)
+        dialog.close_button = CloseButton(header, close, scale=dialog.scale)
         dialog.close_button.pack(side="right", anchor="n")
     heading = tk.Frame(header, bg=WHITE)
     heading.pack(side="left", fill="x", expand=True)
@@ -243,10 +280,9 @@ class SettingsDialog(OverlayDialog):
         rows = tk.Frame(self.preferences, bg=WHITE)
         rows.pack(fill="x")
         row = setting_row(self, rows, "刷新间隔", "电量数据的自动读取频率")
-        style = ttk.Style(self.root)
-        style.configure("Nexus.TCombobox", padding=self.p(5))
-        self.combo = ttk.Combobox(row, textvariable=self.interval, values=[label for _, label in tc.INTERVAL_CHOICES],
-                                  width=12, state="readonly", font=self.font(14), style="Nexus.TCombobox")
+        from interval_picker import IntervalPicker
+        self.combo = IntervalPicker(row, self, self.interval,
+                                    [label for _, label in tc.INTERVAL_CHOICES], scale=self.scale)
         self.combo.place(relx=1, rely=.5, x=-self.p(2), anchor="e")
         for title, detail, variable in (("自动刷新", "持续更新已连接设备的电量", self.auto),
                                         ("开机启动托盘", "登录 Windows 后在后台显示电量", self.boot),

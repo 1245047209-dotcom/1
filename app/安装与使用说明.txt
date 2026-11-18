@@ -1,6 +1,6 @@
-Nexus 外设电量中心 v67
+Nexus 外设电量中心 v72
 
-Windows 10/11 x64。运行 Nexus-v67-Windows-x64-Setup.exe 安装，安装包包含运行环境。
+Windows 10/11 x64。运行 Nexus-v72-Windows-x64-Setup.exe 安装，安装包包含运行环境。
 旧版本请选择原安装目录覆盖安装，保留设备列表、设置和耗电记录。
 
 安装后从桌面或开始菜单打开 Nexus。设置中可以检查 GitHub 正式版本更新。

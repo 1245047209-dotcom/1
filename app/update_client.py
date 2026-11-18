@@ -41,7 +41,7 @@ def current_version():
         version_tuple(value)
         return value
     except (OSError, UpdateError):
-        return "v59"
+        return "v70"
 
 
 def repository_name(value):
