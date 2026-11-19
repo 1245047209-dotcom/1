@@ -262,6 +262,7 @@ class NexusPanel:
         import tkinter as tk
         from tkinter import ttk
         from refresh_button import RefreshButton
+        from interval_picker import IntervalPicker
         from device_navigation import DeviceNavigation
         from view_switcher import ViewSwitcher
 
@@ -382,6 +383,11 @@ class NexusPanel:
         self.after_id = None
         self.settings_window = None
         self.receiver_search = None
+        self.theme_choice = tk.StringVar(root, value=theme.MODE_LABELS[self.appearance.mode])
+        self.theme_picker = IntervalPicker(
+            self.canvas, root, self.theme_choice, theme.MODE_LABELS.values(),
+            scale=self.ui.factor, show_clock=False, command=self.select_theme,
+        )
         self.receiver_button = theme.widget(tk.Button,
             self.canvas, text="搜索设备", command=self.open_receiver_search,
             font=(FONT, 9, "bold"), bg=theme.SURFACE, fg=theme.TEXT, activebackground=theme.Color("#e9ebee", "#333b51"),
@@ -458,6 +464,22 @@ class NexusPanel:
         self.load_toolbar()
         self.update_device_choices()
         self.draw()
+
+    def select_theme(self, choice):
+        mode = next(mode for mode, label in theme.MODES if choice == label)
+        if mode == self.appearance.mode:
+            return
+        try:
+            config = tc.load_config()
+            config["theme"] = mode
+            tc.save_config(config, strict=True)
+        except OSError as exc:
+            from tkinter import messagebox
+
+            self.theme_choice.set(theme.MODE_LABELS[self.appearance.mode])
+            messagebox.showerror("主题设置失败", str(exc) or "无法保存主题设置，请重试", parent=self.root)
+            return
+        self.appearance.set_mode(mode)
 
     def load_keyboard_product_image(self, tk):
         """加载产品图并裁掉透明留白，生成两个适配窗口宽度的尺寸。"""
@@ -946,6 +968,10 @@ class NexusPanel:
                                font=(FONT, 10), tags="shape")
         yield
 
+        self.canvas.create_text(w - 586, 38, text="主题", anchor="e", fill=self.color(theme.MUTED),
+                                font=(FONT, 11, "bold"))
+        self.ui.place(self.theme_picker, x=w - 576, y=19)
+        yield
         self.ui.place(self.receiver_button, x=w - 420, y=21, width=118, height=34)
         yield
         self.ui.place(self.refresh_button, x=w - 289, y=17, width=104, height=42)

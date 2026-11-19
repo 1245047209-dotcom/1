@@ -1,4 +1,4 @@
-"""The refresh interval selector and its inline option list."""
+"""A compact selector and its inline option list."""
 from __future__ import annotations
 
 import tkinter as tk
@@ -22,9 +22,10 @@ def _rounded(canvas, x1, y1, x2, y2, radius, **options):
 
 
 class IntervalPicker(tk.Canvas):
-    def __init__(self, master, overlay, variable, values, *, scale=.85, show_clock=True):
+    def __init__(self, master, overlay, variable, values, *, scale=.85, show_clock=True, command=None):
         self.scale = scale
         self.show_clock = show_clock
+        self.command = command
         self.overlay, self.variable, self.values = overlay, variable, tuple(values)
         self.root = overlay.winfo_toplevel()
         self.default_width = self.p(142)
@@ -175,7 +176,10 @@ class IntervalPicker(tk.Canvas):
 
     def _select(self, index):
         self._close()
-        self.variable.set(self.values[index])
+        value = self.values[index]
+        self.variable.set(value)
+        if self.command is not None:
+            self.command(value)
 
     def _press(self, _event):
         self.pressed = True

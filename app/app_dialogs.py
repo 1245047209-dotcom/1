@@ -154,7 +154,7 @@ class OverlayDialog(tk.Canvas):
     def __init__(self, root, title, subtitle, *, width=820, height=590, on_close=None):
         self.root = root
         import tray_common as tc
-        self.appearance = theme.install(root, tc.load_config().get("theme"))
+        theme.install(root, tc.load_config().get("theme"))
         self.scale = getattr(getattr(root, "_nexus_ui", None), "factor", .85)
         self.card_width, self.card_height = width, height
         self.on_close = on_close or self.destroy
@@ -228,7 +228,7 @@ class OverlayDialog(tk.Canvas):
                 pass
 
 
-def setting_row(dialog, master, title, description, *, height=57, bg=theme.SURFACE):
+def setting_row(dialog, master, title, description, *, height=64, bg=theme.SURFACE):
     row = theme.widget(tk.Frame, master, bg=bg, height=dialog.p(height))
     row.pack(fill="x")
     row.pack_propagate(False)
@@ -280,7 +280,6 @@ class SettingsDialog(OverlayDialog):
         self.boot = tk.BooleanVar(value=tc.is_autostart_enabled())
         self.alert = tk.BooleanVar(value=bool(tc.load_config().get("low_battery_alert", True)))
         self.gpu = tk.BooleanVar(value=bool(tc.load_config().get("gpu_animation", True)))
-        self.theme_choice = tk.StringVar(value=theme.MODE_LABELS[self.appearance.mode])
         self.feedback = tk.StringVar()
         footer = theme.widget(tk.Frame, self.preferences, bg=theme.SURFACE)
         footer.pack(side="bottom", fill="x")
@@ -297,10 +296,6 @@ class SettingsDialog(OverlayDialog):
         rows = theme.widget(tk.Frame, self.preferences, bg=theme.SURFACE)
         rows.pack(fill="x")
         from interval_picker import IntervalPicker
-        row = setting_row(self, rows, "主题颜色", "选择 Nexus 界面的外观")
-        self.theme_picker = IntervalPicker(row, self, self.theme_choice, theme.MODE_LABELS.values(),
-                                           scale=self.scale, show_clock=False)
-        self.theme_picker.place(relx=1, rely=.5, x=-self.p(2), anchor="e")
         row = setting_row(self, rows, "刷新间隔", "电量数据的自动读取频率")
         self.combo = IntervalPicker(row, self, self.interval,
                                     [label for _, label in tc.INTERVAL_CHOICES], scale=self.scale)
@@ -331,17 +326,15 @@ class SettingsDialog(OverlayDialog):
             if self.boot.get() != tc.is_autostart_enabled() and not tc.set_autostart(self.boot.get()):
                 raise OSError("开机启动设置未能保存，请重试")
             interval = next(sec for sec, label in tc.INTERVAL_CHOICES if label == self.interval.get())
-            mode = next(mode for mode, label in theme.MODES if label == self.theme_choice.get())
             cfg = tc.load_config()
             cfg.update(interval=interval, autostart=self.boot.get(), low_battery_alert=self.alert.get(),
-                       gpu_animation=self.gpu.get(), theme=mode)
+                       gpu_animation=self.gpu.get())
             tc.save_config(cfg, strict=True)
             panel.auto, panel.interval = self.auto.get(), interval
             tc.post_to_tray(tc.MSG_RELOAD)
             panel.schedule()
             panel.transition.set_gpu_enabled(self.gpu.get())
-            if not self.appearance.set_mode(mode):
-                panel.draw()
+            panel.draw()
             self.feedback.set("设置已保存")
         except (OSError, ValueError, StopIteration) as exc:
             self.feedback.set(str(exc) or "设置保存失败，请重试")
