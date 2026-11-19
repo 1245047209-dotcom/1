@@ -7,11 +7,9 @@ import struct
 import time
 import tkinter as tk
 import zlib
+import theme
 
-ON = "#5755d9"
-OFF = "#dfe2eb"
-THUMB = "#ffffff"
-FOCUS = "#b7b5f4"
+OFF = theme.Color("#dfe2eb", "#424d66")
 
 
 def _rgb(color):
@@ -19,10 +17,10 @@ def _rgb(color):
 
 
 @lru_cache(maxsize=192)
-def _image(width, height, position, on, focused):
+def _image(width, height, position, track_color, focus_color, focused):
     """Render to PNG with subpixel edge coverage, preserving the theme colors."""
-    track = _rgb(ON if on else OFF)
-    thumb, focus = _rgb(THUMB), _rgb(FOCUS)
+    track = _rgb(track_color)
+    thumb, focus = _rgb(theme.ON_PRIMARY.light), _rgb(focus_color)
     radius, cy = (height - 2) / 2, height / 2
     left, right = 1 + radius, width - 1 - radius
     thumb_x, thumb_radius = left + (right - left) * position / 1000, (height - 6) / 2
@@ -70,6 +68,11 @@ class Switch(tk.Canvas):
         self.bind("<FocusOut>", lambda e: self._focus(False))
         self.trace = variable.trace_add("write", self._changed)
         self.bind("<Destroy>", self._destroy_trace)
+        theme.watch(self, self.apply_theme)
+        self.redraw()
+
+    def apply_theme(self):
+        self.configure(bg=self.master.cget("bg"))
         self.redraw()
 
     def _press(self, _event):
@@ -123,8 +126,10 @@ class Switch(tk.Canvas):
             return
         width = max(12, self.winfo_width() if self.winfo_width() > 1 else self.default_width)
         height = max(8, self.winfo_height() if self.winfo_height() > 1 else self.default_height)
-        self.photo = tk.PhotoImage(master=self, data=_image(width, height, round(self.position * 1000),
-                                                          bool(self.variable.get()), self.focused), format="PNG")
+        track = theme.color(self, theme.PRIMARY if self.variable.get() else OFF)
+        image = _image(width, height, round(self.position * 1000), track,
+                       theme.color(self, theme.FOCUS), self.focused)
+        self.photo = tk.PhotoImage(master=self, data=image, format="PNG")
         if not hasattr(self, "image_item"):
             self.image_item = self.create_image(0, 0, anchor="nw", image=self.photo)
         else:

@@ -4,6 +4,7 @@ import ctypes as c
 from ctypes import wintypes as w
 import tkinter as tk
 import tkinter.font as tkfont
+import theme
 
 
 class _Startup(c.Structure):
@@ -127,6 +128,7 @@ class UIScale:
     def __init__(self, root, factor=.85):
         self.root, self.factor = root, factor
         self.fonts, self.images = {}, {}
+        self.asset_images = {}
         self.native = NativeImages()
         self.pixels_per_point = float(root.tk.call("tk", "scaling"))
 
@@ -158,6 +160,17 @@ class UIScale:
             result = self.native.resize(data, max(1, self.px(width)), max(1, self.px(height)))
             self.images[name] = tk.PhotoImage(master=self.root, data=result, format="PNG")
         return self.images[name]
+
+    def load_asset(self, path, size):
+        path = theme.asset(self.root, path)
+        key = path, size
+        if key not in self.asset_images:
+            image = tk.PhotoImage(master=self.root, file=str(path))
+            if (image.width(), image.height()) != size:
+                data = self.root.tk.call(str(image), "data", "-format", "png")
+                image = tk.PhotoImage(master=self.root, data=self.native.resize(data, *size), format="PNG")
+            self.asset_images[key] = image
+        return self.asset_images[key]
 
     def canvas(self, canvas):
         for _ in self.canvas_steps(canvas):

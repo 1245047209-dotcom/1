@@ -1,6 +1,7 @@
 """A smooth, keyboard-accessible refresh control for the Tk panel."""
 from pathlib import Path
 import tkinter as tk
+import theme
 
 
 class RefreshButton(tk.Canvas):
@@ -11,7 +12,8 @@ class RefreshButton(tk.Canvas):
         self.ui = ui
         super().__init__(master, width=ui.px(self.WIDTH) if ui else self.WIDTH,
                          height=ui.px(self.HEIGHT) if ui else self.HEIGHT,
-                         bg="#f3f4f6", highlightthickness=0, takefocus=True,
+                         bg=theme.color(master, theme.Color("#f3f4f6", theme.BACKGROUND.dark)),
+                         highlightthickness=0, takefocus=True,
                          cursor="hand2")
         self.command = command
         self.phase = "idle"
@@ -23,6 +25,7 @@ class RefreshButton(tk.Canvas):
         self._surfaces = self._load_frames(assets / "refresh-button.png", 104, 42, 12)
         self._symbols = self._load_frames(assets / "refresh-symbols.png", 18, 18, 27)
         self._surface_item = self.create_image(0, 0, anchor="nw")
+        theme.style(self, bg=theme.Color("#f3f4f6", theme.BACKGROUND.dark))
         self._symbol_item = self.create_image(16, 12, anchor="nw")
         self._label_item = self.create_text(63, 21, fill="white",
                                             font=("Microsoft YaHei UI", 9, "bold"))

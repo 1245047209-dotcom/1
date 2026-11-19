@@ -11,7 +11,9 @@ import ctypes
 import json
 import os
 import sys
+import tempfile
 from ctypes import wintypes
+from pathlib import Path
 from typing import Optional
 
 import win_link
@@ -33,6 +35,7 @@ DEFAULT_CONFIG = {
     "autostart": True,     # 开机自启
     "low_battery_alert": True,
     "gpu_animation": True,
+    "theme": "system",
 }
 
 INTERVAL_CHOICES = [(30, "30 秒"), (60, "1 分钟"), (120, "2 分钟"),
@@ -73,13 +76,25 @@ def load_config() -> dict:
     return cfg
 
 
-def save_config(cfg: dict) -> None:
+def save_config(cfg: dict, *, strict=False) -> None:
     clean = {k: cfg.get(k, DEFAULT_CONFIG[k]) for k in DEFAULT_CONFIG}
+    path = Path(CONFIG_PATH)
+    temporary = None
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(clean, f, ensure_ascii=False, indent=2)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.stem + ".", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(clean, stream, ensure_ascii=False, indent=2)
+        os.replace(temporary, path)
     except OSError:
-        pass
+        if strict:
+            raise
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # --------------------------------------------------------------------------

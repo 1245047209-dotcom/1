@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import tkinter as tk
+import theme
 
 
-TEXT = "#202536"
-ACCENT = "#5755d9"
-SELECTED = "#eeedfc"
-SOFT = "#f6f6fb"
-LINE = "#e8eaf1"
 FONT = "Microsoft YaHei UI"
+HOVER = theme.Color("#f1effc", "#302d4b")
+HIGHLIGHT = theme.Color("#e0ddfb", "#403967")
+MENU_SHADOW = theme.Color("#e3e1f3", "#10131e")
+FOCUS_EDGE = theme.Color("#9d99eb", theme.FOCUS.dark)
 
 
 def _rounded(canvas, x1, y1, x2, y2, radius, **options):
@@ -22,8 +22,9 @@ def _rounded(canvas, x1, y1, x2, y2, radius, **options):
 
 
 class IntervalPicker(tk.Canvas):
-    def __init__(self, master, overlay, variable, values, *, scale=.85):
+    def __init__(self, master, overlay, variable, values, *, scale=.85, show_clock=True):
         self.scale = scale
+        self.show_clock = show_clock
         self.overlay, self.variable, self.values = overlay, variable, tuple(values)
         self.root = overlay.winfo_toplevel()
         self.default_width = self.p(142)
@@ -51,10 +52,17 @@ class IntervalPicker(tk.Canvas):
         for sequence in ("Up", "Down", "Home", "End", "Return", "space", "Escape", "Alt-Down"):
             self.bind(f"<{sequence}>", self._key)
         self.trace = variable.trace_add("write", self._value_changed)
-        self._draw_trigger()
+        theme.watch(self, self.apply_theme)
+        self.apply_theme()
 
     def p(self, value):
         return round(value * self.scale)
+
+    def apply_theme(self):
+        self.configure(bg=self.master.cget("bg"))
+        if self.popup is not None:
+            self.popup.configure(bg=self.cget("bg"))
+        self._value_changed()
 
     def _draw_trigger(self):
         self.delete("all")
@@ -62,29 +70,30 @@ class IntervalPicker(tk.Canvas):
         height = max(self.winfo_height(), self.default_height)
         mid_y = height / 2
         expanded = self.popup is not None
-        fill = SELECTED if expanded else "#f1effc" if self.hovered else SOFT
-        border = "#9d99eb" if self.focused or expanded else LINE
+        fill = theme.color(self, theme.SELECTED if expanded else HOVER if self.hovered else theme.SOFT)
+        border = theme.color(self, FOCUS_EDGE if self.focused or expanded else theme.LINE)
         _rounded(self, 1, 1, width - 1, height - 1, self.p(12), fill=fill, outline=border)
-        clock_x, radius = self.p(18), self.p(7)
-        self.create_oval(clock_x - radius, mid_y - radius, clock_x + radius, mid_y + radius,
-                         outline=ACCENT, width=self.p(1.4))
-        self.create_line(clock_x, mid_y - self.p(4), clock_x, mid_y, clock_x + self.p(3), mid_y,
-                         fill=ACCENT, width=self.p(1.4), capstyle="round", joinstyle="round")
-        self.create_text(self.p(32), mid_y, text=self.variable.get(), anchor="w", fill=TEXT,
+        if self.show_clock:
+            clock_x, radius = self.p(18), self.p(7)
+            self.create_oval(clock_x - radius, mid_y - radius, clock_x + radius, mid_y + radius,
+                             outline=theme.color(self, theme.ACCENT), width=self.p(1.4))
+            self.create_line(clock_x, mid_y - self.p(4), clock_x, mid_y, clock_x + self.p(3), mid_y,
+                             fill=theme.color(self, theme.ACCENT), width=self.p(1.4), capstyle="round", joinstyle="round")
+        self.create_text(self.p(32 if self.show_clock else 14), mid_y, text=self.variable.get(), anchor="w", fill=theme.color(self, theme.TEXT),
                          font=(FONT, -self.p(14), "bold"))
         arrow_x, half_width = width - self.p(16), self.p(4)
         side_y, center_y = (mid_y + 2, mid_y - 2) if expanded else (mid_y - 2, mid_y + 2)
         self.create_line(arrow_x - half_width, side_y, arrow_x, center_y, arrow_x + half_width, side_y,
-                         fill=ACCENT, width=self.p(1.7), capstyle="round", joinstyle="round")
+                         fill=theme.color(self, theme.ACCENT), width=self.p(1.7), capstyle="round", joinstyle="round")
 
     def _draw_popup(self):
         popup = self.popup
         popup.delete("all")
         width, height = self.popup_width, self.row_height * len(self.values) + 2 * self.padding
         _rounded(popup, self.p(2), self.p(3), width - 1, height - 1, self.p(12),
-                 fill="#e3e1f3", outline="")
+                 fill=theme.color(self, MENU_SHADOW), outline="")
         _rounded(popup, 1, 1, width - self.p(3), height - self.p(4), self.p(12),
-                 fill="#ffffff", outline=LINE)
+                 fill=theme.color(self, theme.SURFACE), outline=theme.color(self, theme.LINE))
         highlight = self.active if self.pointer_row is None else self.pointer_row
         for index, value in enumerate(self.values):
             top = self.padding + index * self.row_height
@@ -93,14 +102,14 @@ class IntervalPicker(tk.Canvas):
             if selected or index == highlight:
                 _rounded(popup, self.padding, top + 1, width - self.padding - self.p(2),
                          top + self.row_height - 1, self.p(8),
-                         fill="#e0ddfb" if index == highlight else SOFT, outline="")
+                         fill=theme.color(self, HIGHLIGHT if index == highlight else theme.SOFT), outline="")
             popup.create_text(self.p(15), mid_y, text=value, anchor="w",
-                              fill=ACCENT if selected else TEXT,
+                              fill=theme.color(self, theme.ACCENT if selected else theme.TEXT),
                               font=(FONT, -self.p(14), "bold" if selected else "normal"))
             if selected:
                 check_x = width - self.p(23)
                 popup.create_line(check_x - self.p(4), mid_y, check_x - self.p(1), mid_y + self.p(3),
-                                  check_x + self.p(5), mid_y - self.p(4), fill=ACCENT,
+                                  check_x + self.p(5), mid_y - self.p(4), fill=theme.color(self, theme.ACCENT),
                                   width=self.p(2), capstyle="round", joinstyle="round")
 
     def _open(self):

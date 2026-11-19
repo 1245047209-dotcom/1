@@ -30,6 +30,9 @@ class DeviceTransition:
         self.styles = {}
         self.frame_sizes = {}
         self.sources = OrderedDict()
+        self.fade_background = "white"
+        self.background_rgb = (255, 255, 255)
+        self.channel_lookups = None
         self.finished = finished
         self.pacer = FramePacer(root, clock=clock)
         self.builder = None
@@ -181,8 +184,30 @@ class DeviceTransition:
             return color
         if color not in self.colors:
             self.colors[color] = tuple(value // 257 for value in self.root.winfo_rgb(color))
-        rgb = tuple(round(255 + (value - 255) * self.alpha) for value in self.colors[color])
+        rgb = tuple(round(base + (value - base) * self.alpha)
+                    for value, base in zip(self.colors[color], self.background_rgb))
         return "#%02x%02x%02x" % rgb
+
+    def set_background(self, background):
+        if background == self.fade_background:
+            return
+        self.cancel_timer()
+        if self.gpu is not None:
+            self.gpu.clear()
+        self.token += 1
+        self.phase, self.alpha, self.offset = "idle", 1., 0.
+        self.fade_background = background
+        self.background_rgb = tuple(value // 257 for value in self.root.winfo_rgb(background))
+        self.channel_lookups = None
+        if self.background_rgb != (255, 255, 255):
+            self.channel_lookups = tuple(
+                tuple(bytes(round(base + (value - base) * level / (FADE_STEPS - 1)) for value in range(256))
+                      for base in self.background_rgb)
+                for level in range(FADE_STEPS - 1)
+            )
+        self.image_frames.clear()
+        self.frame_sizes.clear()
+        self.sources.clear()
 
     def fade_image(self, image_name):
         level = round(self.alpha*(FADE_STEPS-1))
@@ -192,13 +217,18 @@ class DeviceTransition:
         if key not in self.image_frames:
             import tkinter as tk
             if image_name not in self.sources:
-                data = self.root.tk.call(image_name, "data", "-format", "ppm", "-background", "white")
+                data = self.root.tk.call(image_name, "data", "-format", "ppm", "-background", self.fade_background)
                 magic, size, maximum, pixels = data.split(b"\n", 3)
                 self.sources[image_name] = b"\n".join((magic, size, maximum))+b"\n", pixels
             self.sources.move_to_end(image_name)
             header, pixels = self.sources[image_name]
-            self.image_frames[key] = tk.PhotoImage(master=self.root,
-                data=header+pixels.translate(FADE_LOOKUPS[level]), format="PPM")
+            if self.channel_lookups is None:
+                faded = pixels.translate(FADE_LOOKUPS[level])
+            else:
+                faded = bytearray(len(pixels))
+                for channel, lookup in enumerate(self.channel_lookups[level]):
+                    faded[channel::3] = pixels[channel::3].translate(lookup)
+            self.image_frames[key] = tk.PhotoImage(master=self.root, data=header+faded, format="PPM")
             self.frame_sizes[key] = len(pixels)//3*4
         self.image_frames.move_to_end(key)
         return self.image_frames[key]

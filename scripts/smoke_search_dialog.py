@@ -102,6 +102,30 @@ def smoke():
         assert usb_keyboard.model in search.table.item("0", "values")
         assert search.aula_combo.instate(("readonly", "!disabled"))
         assert search.aula_choice.get() == usb_keyboard.model
+
+        with patch("receiver_search.scan_receivers", side_effect=TimeoutError("USB 搜索超时")):
+            search.search_button.invoke()
+            wait_until(lambda: not search.busy, "failing USB rescan did not finish")
+        assert search.search_button.phase == "error"
+        assert not search.table.get_children()
+        assert "USB 搜索超时" in search.detail.get("1.0", "end")
+        for show_other in (True, False):
+            search.other_switch.invoke()
+            assert search.show_other.get() == show_other
+            assert "搜索失败" in search.status.get(), "changing the filter hid the scan failure"
+            assert "USB 搜索超时" in search.detail.get("1.0", "end")
+
+        with patch("receiver_search.scan_receivers", side_effect=OSError()):
+            search.search_button.invoke()
+            wait_until(lambda: not search.busy, "USB rescan with a blank error did not finish")
+        assert search.search_button.phase == "error"
+        assert "OSError" in search.detail.get("1.0", "end")
+
+        search.search_button.invoke()
+        wait_until(lambda: not search.busy and bool(search.table.get_children()), "USB retry did not recover")
+        assert search.search_button.phase == "idle"
+        assert search.table.get_children() == ("0",)
+
         search.other_switch.invoke()
         assert search.table.get_children() == ("0", "1")
         search.table.selection_set("1")
@@ -134,7 +158,7 @@ def smoke():
         root.update()
         assert not errors
 
-    print("Hidden Tk smoke passed: mode switch during scan, filtering, details, AULA options, copy, add and cleanup.")
+    print("Tk search smoke passed: mode switch, scan failure and retry, filtering, details, AULA options, copy, add and cleanup.")
 
 
 if __name__ == "__main__":

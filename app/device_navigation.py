@@ -3,18 +3,21 @@ from pathlib import Path
 import time
 import tkinter as tk
 from frame_pacer import FramePacer
+import theme
 
 FONT = "Microsoft YaHei UI"
 
 
 class DeviceNavigation(tk.Canvas):
     HEIGHT, DURATION = 38, .20
-    COLORS = {"active": "#26313f", "idle": "#7b8696", "hover": "#46556a"}
+    COLORS = {"active": theme.Color("#26313f", theme.TEXT.dark),
+              "idle": theme.Color("#7b8696", theme.MUTED.dark),
+              "hover": theme.Color("#46556a", theme.TEXT.dark)}
     KINDS = ("keyboard", "mouse", "beats-studio-buds", "headphones", "usb")
 
     def __init__(self, master, *, ui, command, width, visible=3):
         super().__init__(master, width=ui.px(width), height=ui.px(self.HEIGHT),
-                         bg="white", highlightthickness=0, borderwidth=0,
+                         bg=theme.color(master, theme.SURFACE), highlightthickness=0, borderwidth=0,
                          takefocus=True, cursor="hand2")
         self.ui, self.command, self.width, self.limit = ui, command, width, visible
         self.pacer = FramePacer(self, clock=time.perf_counter)
@@ -27,16 +30,8 @@ class DeviceNavigation(tk.Canvas):
         self.started, self.after_id, self.closed = 0.0, None, False
         self.fonts = {state: ui.font((FONT, -14, "bold" if state == "active" else "normal"))
                       for state in self.COLORS}
-        directory = Path(__file__).resolve().parent / "assets" / "navigation"
-        dimensions = {"hover": (48, 38), "focus": (48, 38), "selection": (30, 3)}
-        names = tuple(dimensions) + tuple(f"{kind}-{state}" for kind in self.KINDS for state in self.COLORS)
-        for name in names:
-            photo = tk.PhotoImage(master=self, file=str(directory / f"{name}.png"))
-            size = tuple(ui.px(value) for value in dimensions.get(name, (24, 24)))
-            if (photo.width(), photo.height()) != size:
-                data = photo.tk.call(str(photo), "data", "-format", "png")
-                photo = tk.PhotoImage(master=self, data=ui.native.resize(data, *size), format="PNG")
-            self.photos[name] = photo
+        self.load_assets()
+        theme.watch(self, self.apply_theme)
         self.bind("<Motion>", self.motion)
         self.bind("<Leave>", lambda _event: self.set_hover(None))
         self.bind("<ButtonPress-1>", self.press)
@@ -46,6 +41,20 @@ class DeviceNavigation(tk.Canvas):
         for key in ("Left", "Right", "Home", "End", "space", "Return"):
             self.bind(f"<KeyPress-{key}>", self.key)
         self.bind("<Destroy>", lambda event: self.close() if event.widget is self else None)
+
+    def load_assets(self):
+        directory = Path(__file__).resolve().parent / "assets" / "navigation"
+        dimensions = {"hover": (48, 38), "focus": (48, 38), "selection": (30, 3)}
+        names = tuple(dimensions) + tuple(f"{kind}-{state}" for kind in self.KINDS for state in self.COLORS)
+        for name in names:
+            size = tuple(self.ui.px(value) for value in dimensions.get(name, (24, 24)))
+            self.photos[name] = self.ui.load_asset(directory / f"{name}.png", size)
+
+    def apply_theme(self):
+        self.configure(bg=theme.color(self, theme.SURFACE))
+        self.load_assets()
+        self.surfaces.clear()
+        self.build()
 
     def surface(self, name, logical_width):
         """Stretch only the flat middle; retain antialiased corners."""
@@ -119,7 +128,7 @@ class DeviceNavigation(tk.Canvas):
         self.focus_image = self.create_image(0, 0, anchor="nw", state="hidden")
         if overflow:
             for x, direction, enabled in ((14, -1, self.start > 0), (self.width-14, 1, self.start+self.limit < len(self.items))):
-                color = "#7b8696" if enabled else "#d5dbe3"
+                color = theme.color(self, self.COLORS["idle"] if enabled else theme.Color("#d5dbe3", "#55617d"))
                 self.create_line(*[self.ui.px(v) for v in (x-direction*2, 14, x+direction*2, 18, x-direction*2, 22)],
                                  fill=color, width=1.2, capstyle="round", joinstyle="round")
                 if enabled:
@@ -149,7 +158,7 @@ class DeviceNavigation(tk.Canvas):
             self.coords(self.icons[slot], x, self.ui.px(18))
             self.coords(self.labels[slot], x+self.ui.px(34), self.ui.px(18))
             self.itemconfigure(self.icons[slot], image=self.photos[f"{kind}-{state}"])
-            self.itemconfigure(self.labels[slot], text=title, font=font, fill=self.COLORS[state])
+            self.itemconfigure(self.labels[slot], text=title, font=font, fill=theme.color(self, self.COLORS[state]))
             if self.hover == ("item", index) and not active:
                 hover_cell = (left, right)
             if active and self.keyboard_focus:
