@@ -3,17 +3,20 @@ from pathlib import Path
 import time
 import tkinter as tk
 from frame_pacer import FramePacer
+import theme
 
 
 class ViewSwitcher(tk.Canvas):
     WIDTH, HEIGHT = 224, 38
     PADDING, GAP, ICON_SIZE = 4, 4, 16
     DURATION = .18
-    COLORS = {"active": "#ffffff", "idle": "#7b8695", "hover": "#303947"}
+    COLORS = {"active": theme.ON_PRIMARY,
+              "idle": theme.Color("#7b8695", theme.MUTED.dark),
+              "hover": theme.Color("#303947", theme.TEXT.dark)}
 
     def __init__(self, master, *, ui, command, show_icons=True):
         super().__init__(master, width=ui.px(self.WIDTH), height=ui.px(self.HEIGHT),
-                         bg="#ffffff", highlightthickness=0, borderwidth=0,
+                         bg=theme.color(master, theme.SURFACE), highlightthickness=0, borderwidth=0,
                          takefocus=True, cursor="hand2")
         self.ui, self.command = ui, command
         self.show_icons = show_icons
@@ -28,21 +31,8 @@ class ViewSwitcher(tk.Canvas):
         self.fonts = {state: ui.font(("Microsoft YaHei UI", -14,
                                      "bold" if state == "active" else "normal"))
                       for state in self.COLORS}
-        self.photos = {}
-        directory = Path(__file__).resolve().parent / "assets" / "view-switcher"
-        names = ("track", "thumb", "hover", "focus")
-        if show_icons:
-            names += tuple(f"{kind}-{state}" for kind in ("all", "single") for state in self.COLORS)
-        dimensions = {"track": (224, 38), "thumb": (112, 36), "hover": (106, 30), "focus": (224, 38)}
-        for name in names:
-            source = tk.PhotoImage(master=self, file=str(directory / f"{name}.png"))
-            size = tuple(ui.px(value) for value in dimensions.get(name, (16, 16)))
-            if (source.width(), source.height()) == size:
-                self.photos[name] = source
-            else:
-                encoded = source.tk.call(str(source), "data", "-format", "png")
-                resized = ui.native.resize(encoded, *size)
-                self.photos[name] = tk.PhotoImage(master=self, data=resized, format="PNG")
+        self.load_assets()
+        theme.watch(self, self.apply_theme)
         self.bind("<Motion>", lambda event: self.set_hover(self.hit(event.x, event.y)))
         self.bind("<Leave>", lambda _event: self.set_hover(None))
         self.bind("<ButtonPress-1>", self.press)
@@ -52,6 +42,24 @@ class ViewSwitcher(tk.Canvas):
         for key in ("Left", "Right", "Home", "End", "space", "Return"):
             self.bind(f"<KeyPress-{key}>", self.key)
         self.bind("<Destroy>", lambda event: self.close() if event.widget is self else None)
+
+    def load_assets(self):
+        self.photos = {}
+        directory = Path(__file__).resolve().parent / "assets" / "view-switcher"
+        names = ("track", "thumb", "hover", "focus")
+        if self.show_icons:
+            names += tuple(f"{kind}-{state}" for kind in ("all", "single") for state in self.COLORS)
+        dimensions = {"track": (224, 38), "thumb": (112, 36), "hover": (106, 30), "focus": (224, 38)}
+        for name in names:
+            size = tuple(self.ui.px(value) for value in dimensions.get(name, (16, 16)))
+            self.photos[name] = self.ui.load_asset(directory / f"{name}.png", size)
+
+    def apply_theme(self):
+        self.configure(bg=theme.color(self, theme.SURFACE))
+        self.load_assets()
+        if self.items:
+            self.build()
+            self.update_content()
 
     @property
     def cell_width(self):
@@ -90,7 +98,7 @@ class ViewSwitcher(tk.Canvas):
                 self.icons.append(self.create_image(0, self.ui.px(19),
                                                    image=self.photos[f"{kind}-idle"], anchor="w"))
             self.labels.append(self.create_text(0, self.ui.px(19), text=label, anchor="w",
-                                                 font=self.fonts["idle"], fill=self.COLORS["idle"]))
+                                                 font=self.fonts["idle"], fill=theme.color(self, self.COLORS["idle"])))
         self.focus_image = self.create_image(0, 0, image=self.photos["focus"], anchor="nw", state="hidden")
         self.place_thumb()
 
@@ -116,7 +124,7 @@ class ViewSwitcher(tk.Canvas):
                 self.coords(self.icons[index], x, self.ui.px(19))
                 self.itemconfigure(self.icons[index], image=self.photos[f"{kind}-{state}"])
             self.coords(self.labels[index], x + icon_space, self.ui.px(19))
-            self.itemconfigure(self.labels[index], font=font, fill=self.COLORS[state])
+            self.itemconfigure(self.labels[index], font=font, fill=theme.color(self, self.COLORS[state]))
         visible_hover = self.hover is not None and self.items[self.hover][0] != self.selected
         self.itemconfigure(self.hover_image, state="normal" if visible_hover else "hidden")
         if visible_hover:

@@ -1,7 +1,7 @@
 import unittest
 from collections import OrderedDict
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from ui_motion import DeviceTransition, ease_out_cubic, smootherstep
 
@@ -140,40 +140,32 @@ class SchedulingTests(unittest.TestCase):
 
 
 class PanelSwitchTests(unittest.TestCase):
-    def test_dragging_fixed_window_does_not_redraw_its_contents(self):
+    @patch("my_devices.window_work_area", return_value=((0, 0, 1000, 750), 12, 32))
+    def test_dragging_window_redraws_only_if_dimensions_or_monitor_change(self, work_area):
         from my_devices import NexusPanel
         panel = NexusPanel.__new__(NexusPanel)
-        panel.root, panel.draw = Mock(), Mock()
-        panel._layout_size = (952, 553)
+        panel.root = Mock()
+        panel._layout_size = (544, 316)
+        panel._geometry_after_id = None
+        panel._window_work_area = work_area.return_value[0]
         for x, y in ((0, 0), (40, 20), (600, 300)):
-            panel.on_configure(SimpleNamespace(widget=panel.root, width=952, height=553, x=x, y=y))
-        panel.draw.assert_not_called()
-        panel.on_configure(SimpleNamespace(widget=panel.root, width=900, height=550))
-        panel.draw.assert_called_once()
+            panel.on_configure(SimpleNamespace(widget=panel.root, width=544, height=316, x=x, y=y))
+        panel.root.after.assert_not_called()
+        panel.on_configure(SimpleNamespace(widget=panel.root, width=500, height=316))
+        panel.root.after.assert_called_once_with(32, panel.redraw_after_resize)
+        work_area.return_value = ((1000, 0, 1700, 500), 12, 32)
+        panel.on_configure(SimpleNamespace(widget=panel.root, width=500, height=316))
+        panel.root.after_cancel.assert_called_once()
+        self.assertEqual(panel.root.after.call_count, 2)
 
-    def test_view_switch_keeps_user_window_geometry_and_starts_transition(self):
+    def test_child_widget_configure_does_not_schedule_a_redraw(self):
         from my_devices import NexusPanel
         panel = NexusPanel.__new__(NexusPanel)
-        panel.view_mode, panel.busy = "all", False
-        panel.root, panel.device_store, panel.transition = Mock(), Mock(), Mock()
-        panel.refresh_button = Mock()
-        panel.set_view_mode("single")
-        self.assertEqual(panel.view_mode, "single")
-        panel.device_store.set_view_mode.assert_called_once_with("single")
-        panel.transition.start.assert_called_once()
-        panel.root.geometry.assert_not_called()
-
-    def test_child_widget_configure_does_not_trigger_a_full_redraw(self):
-        from my_devices import NexusPanel
-        panel = NexusPanel.__new__(NexusPanel)
-        panel.root, panel.draw = Mock(), Mock()
+        panel.root = Mock()
         event = Mock()
         event.widget = Mock()
         panel.on_configure(event)
-        panel.draw.assert_not_called()
-        event.widget = panel.root
-        panel.on_configure(event)
-        panel.draw.assert_called_once()
+        panel.root.after.assert_not_called()
 
 
 class FrameCacheTests(unittest.TestCase):

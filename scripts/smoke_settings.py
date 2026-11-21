@@ -23,12 +23,13 @@ def smoke(app: Path, candidate: Path) -> None:
     from my_devices import NexusPanel
 
     assert Path(app_dialogs.__file__).resolve().parent == candidate
-    settings_values = {"autostart": False, "interval": 30, "low_battery_alert": True, "gpu_animation": True}
+    settings_values = {"autostart": False, "interval": 30, "low_battery_alert": True, "gpu_animation": True,
+                       "theme": "dark"}
     choices = tray_common.INTERVAL_CHOICES
 
     root = tk.Tk()
     root.withdraw()
-    root.geometry("952x553+30000+30000")
+    root.geometry("459x258+100+100")
     root.attributes("-alpha", 0.0)
     errors = []
     root.report_callback_exception = lambda _type, error, _trace: errors.append(error)
@@ -70,10 +71,18 @@ def smoke(app: Path, candidate: Path) -> None:
         picker = window.combo
         assert isinstance(picker, IntervalPicker)
         assert window.interval.get() == "30 秒"
+        assert (window.winfo_width(), window.winfo_height()) == (root.winfo_width(), root.winfo_height())
         assert window.close_button.winfo_ismapped()
+        assert window.save_button.winfo_ismapped()
+        assert window.preferences_canvas.yview()[1] < 1
+        window._scroll_preferences("moveto", 1)
+        flush()
+        assert window.preferences_canvas.yview()[1] == 1
+        window._scroll_preferences("moveto", 0)
+        flush()
         assert root.focus_get() is not window.close_button
 
-        picker.focus_set()
+        picker.focus_force()
         key(picker, "Down")
         assert picker.popup is not None
         key(picker, "End")
@@ -88,7 +97,7 @@ def smoke(app: Path, candidate: Path) -> None:
         assert menu is not None and menu.winfo_ismapped()
         assert 0 <= menu.winfo_x() < menu.winfo_x() + menu.winfo_width() <= window.winfo_width()
         assert 0 <= menu.winfo_y() < menu.winfo_y() + menu.winfo_height() <= window.winfo_height()
-        mouse(window.update_section, "<ButtonPress-1>")
+        mouse(window.header, "<ButtonPress-1>")
         assert picker.popup is None, "Clicking elsewhere in settings should close the list"
 
         mouse(picker, "<ButtonPress-1>")
@@ -99,14 +108,14 @@ def smoke(app: Path, candidate: Path) -> None:
         mouse(menu, "<ButtonRelease-1>", y=third_row)
         assert picker.popup is None and window.interval.get() == choices[2][1]
 
-        picker.focus_set()
+        picker.focus_force()
         key(picker, "Return")
         key(picker, "Tab")
         assert picker.popup is None, "Tab should move focus out of the picker and dismiss its list"
         assert root.focus_get() is not picker
 
         for index, (_seconds, label) in enumerate(choices):
-            picker.focus_set()
+            picker.focus_force()
             key(picker, "Return")
             assert picker.popup is not None
             key(picker, "Home")
@@ -122,13 +131,24 @@ def smoke(app: Path, candidate: Path) -> None:
         flush()
         assert panel.settings_window is window and window.interval.get() == "30 分钟"
         window._save()
-        write_settings.assert_called_once_with({**settings_values, "interval": 1800})
+        write_settings.assert_called_once_with({**settings_values, "interval": 1800}, strict=True)
         reload_tray.assert_called_once_with(tray_common.MSG_RELOAD)
         set_autostart.assert_not_called()
         panel.schedule.assert_called_once_with()
         assert panel.interval == 1800
+        window.show_updates()
+        flush()
+        assert window.tabs.selected == "updates" and window.update_section.primary.winfo_ismapped()
+        assert window.update_section.notes.winfo_ismapped() and window.update_section.notes.winfo_height() > 12
+        root.geometry("544x478")
+        flush()
+        assert (window.winfo_width(), window.winfo_height()) == (544, 478)
+        root.geometry("459x258")
+        window.select_page("settings")
+        flush()
+        assert (window.winfo_width(), window.winfo_height()) == (459, 258)
 
-        picker.focus_set()
+        picker.focus_force()
         key(picker, "Return")
         key(picker, "Escape")
         assert window.winfo_exists() and picker.popup is None
@@ -150,7 +170,7 @@ def smoke(app: Path, candidate: Path) -> None:
         NexusPanel.open_settings(panel)
         flush()
         window = panel.settings_window
-        window.close_button.focus_set()
+        window.close_button.focus_force()
         flush()
         assert root.focus_get() is window.close_button, root.focus_get()
         key(window.close_button, "Return")
@@ -161,5 +181,165 @@ def smoke(app: Path, candidate: Path) -> None:
     print("Settings smoke passed: six interval options, cancel and save, outside dismissal, Escape, close mouse and keyboard.")
 
 
+def smoke_theme():
+    import tempfile
+    import time
+    import tkinter as tk
+
+    import theme
+    import tray_common as tc
+    from app_dialogs import SettingsDialog
+    from my_devices import NexusPanel
+    from receiver_scan import Receiver
+    from saved_devices import DeviceStore
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-alpha", 0.0)
+    errors = []
+    root.report_callback_exception = lambda _type, error, _trace: errors.append(error)
+
+    def wait_for(condition):
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            root.update()
+            if errors:
+                raise errors[0]
+            if condition():
+                return
+            time.sleep(.015)
+        raise AssertionError("Timed out waiting for theme or scan")
+
+    with ExitStack() as stack:
+        stack.callback(root.destroy)
+        data = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        stack.enter_context(mocks.patch.object(tc, "CONFIG_PATH", data / "tray_config.json"))
+        tc.save_config({"interval": 30, "gpu_animation": False}, strict=True)
+        stack.enter_context(mocks.patch.object(tc, "is_autostart_enabled", return_value=False))
+        stack.enter_context(mocks.patch.object(tc, "post_to_tray"))
+        stack.enter_context(mocks.patch("my_devices.DeviceStore", return_value=DeviceStore(data / "devices.json")))
+        stack.enter_context(mocks.patch("aula_discovery.AulaDiscovery", return_value=mocks.Mock()))
+        stack.enter_context(mocks.patch("update_client.load_state", return_value={"auto_check": True}))
+        system = stack.enter_context(mocks.patch.object(theme, "windows_dark", return_value=False))
+        device = Receiver(r"USB\VID_0C45&PID_FEF9\TEST", "F87S", "AULA", "0C45:FEF9", "键盘", "测试", True)
+        stack.enter_context(mocks.patch("receiver_search.scan_receivers", return_value=[device]))
+        stack.enter_context(mocks.patch("aula_protocols.identify_receivers", side_effect=lambda devices: devices))
+        manager = mocks.Mock(window=None)
+        manager._attach.side_effect = lambda window: setattr(manager, "window", window)
+
+        panel = NexusPanel(root)
+        for name in ("startup_after_id", "after_id", "pump_after_id", "runtime_after_id"):
+            root.after_cancel(getattr(panel, name))
+            setattr(panel, name, None)
+        panel.schedule = mocks.Mock()
+        assert panel.appearance.mode == "system" and tc.load_config()["theme"] == "system"
+        assert panel.canvas.cget("bg") == theme.BACKGROUND.light
+        root.deiconify()
+        root.update()
+        picker = panel.theme_picker
+        assert picker.values == ("跟随系统", "浅色", "深色")
+        assert panel.theme_choice.get() == "跟随系统"
+        assert picker.winfo_ismapped() and picker.master is panel.canvas
+        assert picker.winfo_y() + picker.winfo_height() < panel.receiver_button.winfo_y()
+        assert picker.winfo_x() + picker.winfo_width() < root.winfo_width()
+
+        def key(keysym):
+            picker.event_generate(f"<KeyPress-{keysym}>")
+            root.update()
+            if errors:
+                raise errors[0]
+
+        def choose_with_keys(*keys):
+            picker.focus_force()
+            root.update()
+            key("Return")
+            assert picker.popup is not None
+            for keysym in keys:
+                key(keysym)
+            key("Return")
+            assert picker.popup is None
+
+        panel.open_receiver_search()
+        search = panel.receiver_search
+        wait_for(lambda: bool(search.table.get_children()))
+        details = search.detail.get("1.0", "end")
+        picker.focus_force()
+        root.update()
+        key("Return")
+        assert picker.popup is not None
+        key("End")
+        key("Escape")
+        assert picker.popup is None and tc.load_config()["theme"] == "system"
+
+        def click(widget, x, y):
+            widget.event_generate("<ButtonPress-1>", x=x, y=y)
+            widget.event_generate("<ButtonRelease-1>", x=x, y=y)
+            root.update()
+            if errors:
+                raise errors[0]
+
+        click(picker, picker.winfo_width() // 2, picker.winfo_height() // 2)
+        menu = picker.popup
+        assert menu is not None and menu.winfo_ismapped()
+        assert 0 <= menu.winfo_x() < menu.winfo_x() + menu.winfo_width() <= root.winfo_width()
+        assert picker.winfo_y() < menu.winfo_y() < menu.winfo_y() + menu.winfo_height() <= root.winfo_height()
+        click(menu, menu.winfo_width() // 2, picker.padding + 2 * picker.row_height + picker.row_height // 2)
+        assert picker.popup is None and panel.theme_choice.get() == "深色"
+        assert tc.load_config()["theme"] == "dark"
+        assert panel.appearance.mode == "dark" and panel.appearance.timer is None
+        assert panel.canvas.itemcget(panel.canvas.find_withtag("view_toolbar")[0], "fill") == theme.SURFACE.dark
+        assert panel.canvas.cget("bg") == theme.BACKGROUND.dark
+        assert panel.overview_canvas.cget("bg") == theme.BACKGROUND.dark
+        assert panel.overview_canvas.find_withtag("product_surface")
+        dialog = panel.settings_window = SettingsDialog(panel, manager)
+        assert not hasattr(dialog, "theme_picker")
+        assert dialog.inner.cget("bg") == theme.SURFACE.dark
+        assert dialog.update_section.notes.cget("bg") == theme.SURFACE.dark
+        dialog._save()
+        assert tc.load_config()["theme"] == "dark"
+        dialog.destroy()
+        assert search.window.cget("bg") == theme.BACKGROUND.dark
+        assert search.detail.cget("bg") == theme.SOFT.dark
+        assert panel.appearance.ttk.lookup("Receiver.Treeview", "background") == theme.SURFACE.dark
+        assert search.table.selection() == ("0",) and search.detail.get("1.0", "end") == details
+        panel.transition.alpha = 0.
+        assert panel.transition.fade_color("#ffffff") == theme.BACKGROUND.dark
+        panel.transition.alpha = 1.
+        panel.transition.start()
+        assert panel.transition.active
+
+        system.return_value = True
+        with mocks.patch.object(tc, "save_config", side_effect=OSError("disk unavailable")), \
+                mocks.patch("tkinter.messagebox.showerror") as show_error:
+            choose_with_keys("Home", "Down")
+            show_error.assert_called_once()
+        assert panel.theme_choice.get() == "深色" and tc.load_config()["theme"] == "dark"
+        choose_with_keys("Home", "Down")
+        assert tc.load_config()["theme"] == "light"
+        assert panel.theme_choice.get() == "浅色"
+        assert not panel.appearance.dark and panel.appearance.timer is None
+        assert not panel.transition.active and not panel.canvas.staging
+        assert panel.canvas.cget("bg") == theme.BACKGROUND.light
+        assert not panel.overview_canvas.find_withtag("product_surface")
+        assert panel.canvas.itemcget(panel.canvas.find_withtag("view_toolbar")[0], "fill") == theme.SURFACE.light
+        assert panel.appearance.ttk.lookup("Receiver.Treeview", "background") == theme.SURFACE.light
+        assert search.detail.get("1.0", "end") == details
+
+        choose_with_keys("Home")
+        assert tc.load_config()["theme"] == "system" and panel.appearance.dark
+        dialog = panel.settings_window = SettingsDialog(panel, manager)
+        assert dialog.inner.cget("bg") == theme.SURFACE.dark
+        system.return_value = False
+        wait_for(lambda: not panel.appearance.dark)
+        assert panel.theme_choice.get() == "跟随系统"
+        assert dialog.inner.cget("bg") == theme.SURFACE.light
+        assert search.window.winfo_exists() and search.table.selection() == ("0",)
+        assert panel.canvas.cget("bg") == theme.BACKGROUND.light
+        assert not errors
+
+    print("Theme smoke passed: toolbar placement, mouse and keyboard, persistent choices, and live system changes.")
+
+
 if __name__ == "__main__":
     smoke(*(Path(argument).resolve() for argument in sys.argv[1:3]))
+    smoke_theme()

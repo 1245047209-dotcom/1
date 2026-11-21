@@ -10,27 +10,28 @@ import traceback
 from pathlib import Path
 from typing import Optional
 
+import theme
 import tray_common as tc
 import win_link
 from device_readers import KEYBOARD_TITLE, Reading, read_all
 from battery_runtime import format_remaining, get_runtime_view
 from low_battery_alert import LowBatteryNotifier
 from saved_devices import DeviceStore, DeviceStoreError, DEFAULT_DEVICE_ID, read_saved_device
-from device_layout import read_device_batch, card_rectangles
+from device_layout import (
+    CARD_MARGIN, CARD_PADDING, FOOTER_HEIGHT, OVERVIEW_TOP,
+    card_rectangles, content_height, read_device_batch,
+)
+from search_window import window_work_area
 
-BG = "#f4f5f8"
-CARD = "#ffffff"
-TEXT = "#202536"
-MUTED = "#798294"
-GREEN = "#5755d9"
-GREEN_SOFT = "#eeedfc"
-BLACK = "#25283b"
-ORANGE = "#848b9d"
-BORDER = "#e8eaf1"
+ASSETS = Path(__file__).resolve().parent / "assets"
+OFFLINE_BADGE = theme.Color("#eeebf2", "#302e36")
 FONT = "Microsoft YaHei UI"
 UI_SCALE = .85
-LAYOUT_WIDTH, LAYOUT_HEIGHT = 1120, 650
-WINDOW_WIDTH, WINDOW_HEIGHT = int(LAYOUT_WIDTH * UI_SCALE + .5), int(LAYOUT_HEIGHT * UI_SCALE + .5)
+MIN_WIDTH, DEFAULT_WIDTH, MAX_WIDTH = 540, 640, 880
+WINDOW_MARGIN = 16
+BADGE_WIDTH = 86
+HEADER_BADGE_HEIGHT = 28
+DEVICE_BADGE_HEIGHT = 26
 
 
 def clipped_label(canvas, text, font, max_width):
@@ -44,9 +45,9 @@ def clipped_label(canvas, text, font, max_width):
 
 def level_color(level: Optional[int]) -> str:
     if level is None:
-        return MUTED
+        return theme.MUTED.light
     if level >= 60:
-        return GREEN
+        return theme.ACCENT.light
     if level >= 30:
         return "#e6ae3d"
     return "#ef6f70"
@@ -75,77 +76,69 @@ def rounded_rect(canvas, x1, y1, x2, y2, radius, fill, outline="", width=1, tags
                            fill=outline, width=width, tags=tag)
 
 
-def draw_card_surface(canvas, x1, y1, x2, y2):
-    """九宫格伸缩白色卡片与柔和投影，保留圆角及模糊边缘的原始比例。"""
+def draw_card_surface(canvas, x1, y1, x2, y2, *, product=False):
+    """Stretch the card artwork while preserving its rim, corners and shadow."""
     import tkinter as tk
 
-    width, height = round(x2 - x1) + 64, round(y2 - y1) + 64
-    if not hasattr(canvas, "_card_surface_source"):
-        asset = Path(__file__).resolve().parent / "assets" / "card-surface.png"
-        canvas._card_surface_source = tk.PhotoImage(master=canvas, file=str(asset))
-        canvas._card_surface_size = None
-    if canvas._card_surface_size != (width, height):
+    name, padding = ("product-surface.png", 12) if product else ("card-surface.png", 32)
+    width, height = round(x2 - x1) + 2*padding, round(y2 - y1) + 2*padding
+    asset = theme.asset(canvas, ASSETS / name)
+    if not hasattr(canvas, "_card_surfaces"):
+        canvas._card_surfaces = {}
+    cached_path, source, size, surface = canvas._card_surfaces.get(name, (None, None, None, None))
+    if cached_path != asset:
+        source = tk.PhotoImage(master=canvas, file=str(asset))
+        size = None
+    if size != (width, height):
         surface = tk.PhotoImage(master=canvas, width=width, height=height)
-        # Corners stay 80x80; only the flat one-pixel edge/center slices stretch.
-        columns = ((0, 80, 0, 80), (80, 1, 80, width - 160), (81, 80, width - 80, 80))
-        rows = ((0, 80, 0, 80), (80, 1, 80, height - 160), (81, 80, height - 80, 80))
+        cx, cy = source.width() // 2, source.height() // 2
+        columns = ((0, cx, 0, cx), (cx, 1, cx, width-2*cx), (cx+1, cx, width-cx, cx))
+        rows = ((0, cy, 0, cy), (cy, 1, cy, height-2*cy), (cy+1, cy, height-cy, cy))
         for sx, sw, dx, dw in columns:
             for sy, sh, dy, dh in rows:
                 tile = tk.PhotoImage(master=canvas, width=sw, height=sh)
-                tile.tk.call(str(tile), "copy", str(canvas._card_surface_source),
-                             "-from", sx, sy, sx + sw, sy + sh, "-to", 0, 0)
+                tile.tk.call(str(tile), "copy", str(source), "-from", sx, sy, sx+sw, sy+sh, "-to", 0, 0)
                 if sw == 1 or sh == 1:
                     tile = tile.zoom(dw if sw == 1 else 1, dh if sh == 1 else 1)
                 surface.tk.call(str(surface), "copy", str(tile), "-to", dx, dy)
-        canvas._card_surface_image = surface
-        canvas._card_surface_size = (width, height)
-    return canvas.create_image(x1 - 32, y1 - 32, image=canvas._card_surface_image,
-                               anchor="nw", tags="shape")
+        canvas._card_surfaces[name] = asset, source, (width, height), surface
+    tags = ("shape", "product_surface") if product else "shape"
+    return canvas.create_image(x1-padding, y1-padding, image=surface, anchor="nw", tags=tags)
 
 
 def battery_photo(canvas, level: Optional[int], charging: bool = False):
     """Reuse the icon atlas for initial layouts and in-place battery updates."""
     import tkinter as tk
 
-    if not hasattr(canvas, "_battery_icon_sheet"):
-        root = canvas._root()
-        if not hasattr(root, "_battery_icon_sheet"):
-            assets = Path(__file__).resolve().parent / "assets"
-            asset = assets / "optimized" / "battery-icons.png"
-            if not asset.exists():
-                asset = assets / "battery-icons.png"
-            root._battery_icon_sheet = tk.PhotoImage(master=root, file=str(asset))
-            root._battery_icon_cache = {}
-        canvas._battery_icon_sheet = root._battery_icon_sheet
-        canvas._battery_icon_cache = root._battery_icon_cache
+    root = canvas._root()
+    if not hasattr(root, "_battery_icons"):
+        root._battery_icons = {}
+    dark = theme.is_dark(canvas)
+    if dark not in root._battery_icons:
+        atlas = ASSETS / "optimized" / "battery-icons.png"
+        if not atlas.exists():
+            atlas = ASSETS / "battery-icons.png"
+        sheet = tk.PhotoImage(master=root, file=str(theme.asset(canvas, atlas, dark=dark)))
+        root._battery_icons[dark] = sheet, {}
+    sheet, cache = root._battery_icons[dark]
     index = 101 if level is None else max(0, min(100, int(level)))
     if charging:
         # 部分设备充电时只报告状态，不提供百分比。
         index = (100 if level is None else index) + 102
     width, height = 34, 17
-    if index not in canvas._battery_icon_cache:
+    if index not in cache:
         image = tk.PhotoImage(master=canvas, width=width, height=height)
-        columns = canvas._battery_icon_sheet.width() // width
+        columns = sheet.width() // width
         sx, sy = index % columns * width, index // columns * height
-        image.tk.call(str(image), "copy", str(canvas._battery_icon_sheet),
+        image.tk.call(str(image), "copy", str(sheet),
                       "-from", sx, sy, sx + width, sy + height, "-to", 0, 0)
-        canvas._battery_icon_cache[index] = image
-    return canvas._battery_icon_cache[index]
+        cache[index] = image
+    return cache[index]
 
 
 def battery_icon(canvas, x, y, level: Optional[int], charging: bool = False):
     return canvas.create_image(x, y + 9, anchor="w",
                                image=battery_photo(canvas, level, charging), tags="shape")
-
-
-def draw_wireless_icon(canvas, x, y):
-    """显示参考图样式的黑色双弧 Wi-Fi 图标，背景透明。"""
-    import tkinter as tk
-
-    if not hasattr(canvas, "_wireless_icon"):
-        asset = Path(__file__).resolve().parent / "assets" / "wireless-icon.png"
-        canvas._wireless_icon = tk.PhotoImage(master=canvas, file=str(asset))
-    canvas.create_image(x, y, image=canvas._wireless_icon, anchor="nw", tags="shape")
 
 
 def draw_keyboard(canvas, x, y, w, h):
@@ -176,12 +169,13 @@ def draw_keyboard(canvas, x, y, w, h):
                  4, "#ffffff", outline="#d7dce0", tags="shape")
 
 
-def draw_bluetooth_symbol(canvas, x, y):
-    canvas.create_oval(x - 78, y - 92, x + 78, y + 92, fill="#edf3ff", outline="", tags="shape")
-    for points in ((x, y - 58, x, y + 58),
-                   (x, y - 58, x + 34, y - 28, x - 30, y + 29),
-                   (x, y + 58, x + 34, y + 28, x - 30, y - 29)):
-        canvas.create_line(*points, fill="#7196da", width=7, capstyle="round", joinstyle="round", tags="shape")
+def draw_bluetooth_symbol(canvas, x, y, scale=1):
+    canvas.create_oval(x - 78*scale, y - 92*scale, x + 78*scale, y + 92*scale,
+                       fill=theme.color(canvas, theme.Color("#edf3ff", "#293653")), outline="", tags="shape")
+    for line in ((0, -58, 0, 58), (0, -58, 34, -28, -30, 29), (0, 58, 34, 28, -30, -29)):
+        points = [(x if index % 2 == 0 else y) + value*scale for index, value in enumerate(line)]
+        canvas.create_line(*points, fill=theme.color(canvas, theme.Color("#7196da", "#9dbbff")),
+                           width=max(2, 7*scale), capstyle="round", joinstyle="round", tags="shape")
 
 
 def is_bluetooth(device):
@@ -236,12 +230,12 @@ def draw_component_batteries(canvas, x, y, components, *, size=13):
         level = part.get("level")
         charging = part.get("charging") is True
         row_y = y + index * 27
-        canvas.create_text(x, row_y, text=label, anchor="w", fill=MUTED, font=(FONT, 9))
+        canvas.create_text(x, row_y, text=label, anchor="w", fill=theme.color(canvas, theme.MUTED), font=(FONT, 9))
         battery_icon(canvas, x + 46, row_y - 7, level, charging)
         value = f"{level}%" if level is not None else "--"
         font = (FONT, size, "bold")
         canvas.create_text(x + 86, row_y, text=value,
-                           anchor="w", fill=GREEN if charging else TEXT if level is not None else MUTED, font=font)
+                           anchor="w", fill=theme.color(canvas, theme.ACCENT) if charging else theme.color(canvas, theme.TEXT) if level is not None else theme.color(canvas, theme.MUTED), font=font)
 
 
 def component_charging_text(components):
@@ -262,31 +256,34 @@ class NexusPanel:
     def __init__(self, root):
         import tkinter as tk
         from tkinter import ttk
+        from app_dialogs import Button
         from refresh_button import RefreshButton
-        from device_navigation import DeviceNavigation
-        from view_switcher import ViewSwitcher
+        from interval_picker import IntervalPicker
 
         self.root = root
+        cfg = tc.load_config()
+        self.appearance = theme.install(root, cfg.get("theme"))
+        theme.style(root, bg=theme.BACKGROUND)
+        theme.track_title_bar(root)
         from ui_scale import UIScale
         from staged_canvas import SceneCanvas
         self.ui = UIScale(root, UI_SCALE)
         root._nexus_ui = self.ui
         root._nexus_panel = self
-        self.canvas = SceneCanvas(root, bg=BG, highlightthickness=0)
+        self.canvas = theme.widget(SceneCanvas, root, bg=theme.BACKGROUND, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         from ui_motion import DeviceTransition
         self.transition = DeviceTransition(root, self.reveal_transition, scale=UI_SCALE,
                                            finished=self.finish_transition,
-                                           gpu_enabled=bool(tc.load_config().get("gpu_animation", True)))
+                                           gpu_enabled=bool(cfg.get("gpu_animation", True)))
+        self.transition.set_background(self.fade_background())
         from reading_ui import LiveItems, ReadingTimes
         self.live = LiveItems(self.transition.update_style)
         self.reading_times = ReadingTimes()
         self.visible_devices = {}
-        brand_path = Path(__file__).resolve().parent / "assets" / "nexus-brand.png"
-        self.toolbar_photo = tk.PhotoImage(master=self.canvas, file=str(brand_path.parent / "navigation" / "toolbar.png"))
-        self.ui.images[str(self.toolbar_photo)] = tk.PhotoImage(master=self.canvas,
-            file=str(brand_path.parent / "navigation" / "toolbar-85.png"))
-        self.brand_photo = tk.PhotoImage(master=self.canvas, file=str(brand_path))
+        brand_path = ASSETS / "nexus-brand.png"
+        self.chrome_images = {}
+        self.badge_images = {}
         self.window_icon_photos = [
             tk.PhotoImage(master=root, file=str(brand_path.parent / f"nexus-window-{size}.png"))
             for size in (16, 32, 48, 256)]
@@ -354,7 +351,6 @@ class NexusPanel:
             self.saved_devices, self.selected_device_id = self.device_store.load()
         except DeviceStoreError as exc:
             root.after(300, lambda text=str(exc): self.show_device_error(text))
-        self.view_mode = self.device_store.view_mode()
         self.default_visible = self.device_store.default_visible()
         self.readings = {DEFAULT_DEVICE_ID: Reading(KEYBOARD_TITLE, "正在读取")} if self.default_visible else {}
         self.readings.update({d.id: Reading(d.label, "正在读取") for d in self.saved_devices})
@@ -363,7 +359,6 @@ class NexusPanel:
         self.aula_discovery = AulaDiscovery()
         self.discovery_refresh_pending = False
         self.overview_runtime_items = {}
-        self.overview_hits = []
         self.low_battery_notifier = LowBatteryNotifier(
             enabled=lambda: bool(tc.load_config().get("low_battery_alert", True)))
         self.busy = False
@@ -374,58 +369,93 @@ class NexusPanel:
         self.pump_after_id = None
         self.runtime_after_id = None
         self.refresh_button = RefreshButton(self.canvas, command=self.refresh, ui=self.ui)
+        theme.style(self.refresh_button, bg=theme.SURFACE)
         self.auto = True
-        self.interval = int(tc.load_config().get("interval", 60))
+        self.interval = int(cfg.get("interval", 60))
         self.after_id = None
         self.settings_window = None
         self.receiver_search = None
-        self.receiver_button = tk.Button(
-            self.canvas, text="搜索设备", command=self.open_receiver_search,
-            font=(FONT, 9, "bold"), bg=CARD, fg=TEXT, activebackground="#e9ebee",
-            activeforeground=TEXT, relief="flat", bd=0, cursor="hand2",
-            highlightthickness=0, takefocus=True)
-        self.device_switcher = DeviceNavigation(self.canvas, ui=self.ui, command=self.select_device, width=600)
-        self.remove_device_button = tk.Button(
-            self.canvas, text="移除设备", command=self.remove_selected_device,
-            font=(FONT, 9), bg="white", fg="#929ba8", activebackground="#f5f7fa", activeforeground="#b45e68",
-            relief="flat", bd=0, cursor="hand2", highlightthickness=0)
-        self.view_switcher = ViewSwitcher(self.canvas, ui=self.ui, command=self.set_view_mode)
-        self.overview_label = tk.Label(self.canvas, font=(FONT, 10), bg="white", fg=MUTED, anchor="w")
-        for widget in (self.receiver_button, self.remove_device_button, self.overview_label):
-            widget.configure(font=self.ui.font(widget.cget("font")))
-        self.overview_canvas = SceneCanvas(self.canvas, bg=BG, highlightthickness=0, yscrollincrement=self.ui.px(24))
+        self.theme_choice = tk.StringVar(root, value=theme.MODE_LABELS[self.appearance.mode])
+        self.theme_picker = IntervalPicker(
+            self.canvas, root, self.theme_choice, theme.MODE_LABELS.values(),
+            scale=self.ui.factor, show_clock=False, command=self.select_theme,
+        )
+        self.receiver_button = Button(self.canvas, "搜索设备", self.open_receiver_search,
+                                      scale=self.ui.factor, width=101, height=36, background=theme.SURFACE)
+        self.settings_button = Button(self.canvas, "设置", self.open_settings,
+                                      scale=self.ui.factor, width=68, height=28)
+        self.overview_canvas = theme.widget(SceneCanvas, self.canvas, bg=theme.BACKGROUND,
+                                           highlightthickness=0, yscrollincrement=self.ui.px(24))
         self.overview_scrollbar = ttk.Scrollbar(self.canvas, orient="vertical", command=self.overview_canvas.yview)
         self.overview_canvas.configure(yscrollcommand=self.overview_scrollbar.set)
         self.overview_scrollable = False
+        self._content_mode = None
+        self.device_menu = theme.widget(tk.Menu, self.overview_canvas, tearoff=False,
+                                        bg=theme.SURFACE, fg=theme.TEXT, activebackground=theme.SELECTED,
+                                        activeforeground=theme.TEXT)
         self.overview_canvas.bind("<ButtonRelease-1>", self.overview_click)
+        self.overview_canvas.bind("<ButtonRelease-3>", self.overview_click)
         self.overview_canvas.bind("<MouseWheel>", lambda event: self.overview_canvas.yview_scroll(
             -int(event.delta / 120) * 3, "units") if self.overview_scrollable else None)
         from card_hover import CardHover
         self.card_hover = CardHover(root, self.overview_canvas, scale=UI_SCALE, assets=brand_path.parent,
-                                   blocked=lambda: self.view_mode != "all" or self.transition.active)
+                                   blocked=lambda: self.transition.active)
         self.overview_canvas.bind("<MouseWheel>", lambda _event: self.root.after_idle(self.card_hover.refresh_pointer), add="+")
-        self.update_device_choices()
         self._drag = None
 
         root.title(tc.UI_TITLE)
-        root.configure(bg=BG)
-        root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-        root.minsize(WINDOW_WIDTH, WINDOW_HEIGHT)
-        root.maxsize(WINDOW_WIDTH, WINDOW_HEIGHT)
-        root.resizable(False, False)
-        self._layout_size = (WINDOW_WIDTH, WINDOW_HEIGHT)
+        self._layout_size = self.ui.px(DEFAULT_WIDTH), 0
+        self._size_limits = self._window_work_area = self._geometry_after_id = None
+        self._positioned = False
+        root.resizable(True, False)
         root.bind("<Configure>", self.on_configure)
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<F5>", self.refresh_shortcut)
         root.bind("<Control-r>", self.refresh_shortcut)
         self.canvas.bind("<ButtonPress-1>", self.start_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.click)
+        self.canvas.bind("<ButtonRelease-1>", self.end_drag)
         self.canvas.bind("<B1-Motion>", self.drag)
+        self.appearance.on_change = self.apply_theme
         self.draw()
         self.startup_after_id = self.root.after(200, self.refresh)
         self.schedule()
         self.pump_after_id = self.root.after(100, self.pump)
         self.runtime_after_id = self.root.after(1000, self.runtime_tick)
+
+    def color(self, swatch):
+        return theme.color(getattr(self, "root", None), swatch)
+
+    def fade_background(self):
+        return self.color(theme.BACKGROUND)
+
+    def chrome_image(self, filename):
+        import tkinter as tk
+
+        path = theme.asset(self.root, ASSETS / filename)
+        if path not in self.chrome_images:
+            self.chrome_images[path] = tk.PhotoImage(master=self.root, file=str(path))
+        return self.chrome_images[path]
+
+    def apply_theme(self):
+        self.transition.set_background(self.fade_background())
+        self.card_hover.reset_assets()
+        self.draw()
+
+    def select_theme(self, choice):
+        mode = next(mode for mode, label in theme.MODES if choice == label)
+        if mode == self.appearance.mode:
+            return
+        try:
+            config = tc.load_config()
+            config["theme"] = mode
+            tc.save_config(config, strict=True)
+        except OSError as exc:
+            from tkinter import messagebox
+
+            self.theme_choice.set(theme.MODE_LABELS[self.appearance.mode])
+            messagebox.showerror("主题设置失败", str(exc) or "无法保存主题设置，请重试", parent=self.root)
+            return
+        self.appearance.set_mode(mode)
 
     def load_keyboard_product_image(self, tk):
         """加载产品图并裁掉透明留白，生成两个适配窗口宽度的尺寸。"""
@@ -532,8 +562,6 @@ class NexusPanel:
             if keyboard is not None:
                 self.low_battery_notifier.check(keyboard)
             success = any(r.ok or (r.connected is True and r.status in ("待适配电量", "未上报电量")) for r in self.readings.values())
-            if self.view_mode == "single":
-                success = self.reading.ok or (self.reading.connected is True and self.reading.status in ("待适配电量", "未上报电量"))
         else:
             self.reading = reading
             self.readings[self.selected_device_id] = reading
@@ -543,7 +571,6 @@ class NexusPanel:
         self.busy = False
         self.refresh_button.set_state("success" if success else "error")
         if isinstance(reading, dict) and identity_changed:
-            self.update_device_choices()
             self.draw()
         self.refresh_readings()
         if success:
@@ -573,18 +600,12 @@ class NexusPanel:
 
     def close(self):
         self.root._nexus_closing = True
-        navigation = getattr(self, "device_switcher", None)
-        if navigation is not None:
-            navigation.close()
         discovery = getattr(self, "aula_discovery", None)
         if discovery is not None:
             discovery.close()
         updates = getattr(self, "updates", None)
         if updates is not None:
             updates.close()
-        view_switcher = getattr(self, "view_switcher", None)
-        if view_switcher is not None:
-            view_switcher.close()
         hover = getattr(self, "card_hover", None)
         if hover is not None:
             hover.close()
@@ -598,8 +619,8 @@ class NexusPanel:
         if self.receiver_search and not self.receiver_search.closed:
             self.receiver_search.close()
         for timer in (self.after_id, self.refresh_result_after_id,
-                      self.refresh_feedback_after_id, self.startup_after_id,
-                      self.pump_after_id, self.runtime_after_id):
+                      self.refresh_feedback_after_id, self.startup_after_id, self.pump_after_id,
+                      self.runtime_after_id, getattr(self, "_geometry_after_id", None)):
             if timer is not None:
                 self.root.after_cancel(timer)
         self.root.destroy()
@@ -608,42 +629,17 @@ class NexusPanel:
         transition = getattr(self, "transition", None)
         if transition is not None and transition.phase == "out":
             return
-        if self.view_mode == "all":
-            item = self.overview_runtime_items.get(DEFAULT_DEVICE_ID)
-            if item is not None:
-                reading = self.readings.get(DEFAULT_DEVICE_ID)
-                text = "暂不可用"
-                if reading and reading.ok:
-                    charging = reading.status in ("charging", "充电中")
-                    view = get_runtime_view(reading.level, charging=charging, valid=True)
-                    text = "充电中，暂不估算" if charging else format_remaining(view["hours"], live=True)
-                if self.overview_canvas.itemcget(item, "text") != text:
-                    self.overview_canvas.itemconfigure(item, text=text)
+        item = self.overview_runtime_items.get(DEFAULT_DEVICE_ID)
+        if item is None:
             return
-        if self.selected_device_id != DEFAULT_DEVICE_ID:
-            return
-        charging = self.reading.status in ("charging", "充电中")
-        view = get_runtime_view(self.reading.level, charging=charging, valid=self.reading.ok)
-        if charging and self.reading.ok:
-            text = "充电中，暂不估算"
-        elif self.reading.ok and self.reading.level == 0:
-            text = "电量即将耗尽"
-        elif self.reading.ok:
-            text = format_remaining(view["hours"], live=True)
-        else:
-            text = "暂不可用" if self.reading.error else "正在读取…"
-        self.canvas.itemconfigure(self.runtime_text_item, text=text)
-        hint = view["hint"]
-        active = hint.startswith("使用中")
-        prefix, detail = (hint[:3], hint[3:]) if active else (hint, "")
-        self.canvas.itemconfigure(self.runtime_hint_item, text=prefix,
-                                  fill="#5755d9" if active else MUTED)
-        self.transition.update_style(self.canvas, self.runtime_hint_item,
-                                     fill="#5755d9" if active else MUTED)
-        self.canvas.itemconfigure(self.runtime_hint_detail_item, text=detail)
-        bounds = self.canvas.bbox(self.runtime_hint_item)
-        x, y = self.canvas.coords(self.runtime_hint_item)
-        self.canvas.coords(self.runtime_hint_detail_item, bounds[2] - 1 if bounds else x, y)
+        reading = self.readings.get(DEFAULT_DEVICE_ID)
+        text = "暂不可用"
+        if reading and reading.ok:
+            charging = reading.status in ("charging", "充电中")
+            view = get_runtime_view(reading.level, charging=charging, valid=True)
+            text = "充电中，暂不估算" if charging else format_remaining(view["hours"], live=True)
+        if self.overview_canvas.itemcget(item, "text") != text:
+            self.overview_canvas.itemconfigure(item, text=text)
 
     def runtime_tick(self):
         self.runtime_after_id = None
@@ -669,8 +665,7 @@ class NexusPanel:
             self.saved_devices, _selected = self.device_store.load()
             for device in self.saved_devices:
                 self.readings.setdefault(device.id, Reading(device.label, "正在读取"))
-            self.update_device_choices()
-            self.draw()
+                self.draw()
             if self.busy:
                 self.discovery_refresh_pending = True
             else:
@@ -742,43 +737,47 @@ class NexusPanel:
         self.live.link(group, name, canvas, (item,), **initial)
         return item
 
-    def live_round(self, canvas, group, name, x1, y1, x2, y2, radius, fill):
-        tag = f"live_fill_{len(self.live.bindings)}"
-        rounded_rect(canvas, x1, y1, x2, y2, radius, fill, tags=tag)
-        self.live.link(group, name, canvas, canvas.find_withtag(tag), fill=fill)
+    def badge_style(self, fill, height):
+        import tkinter as tk
+        from toggle_switch import capsule_png
+
+        width, height = self.ui.px(BADGE_WIDTH), self.ui.px(height)
+        key = width, height, fill
+        if key not in self.badge_images:
+            image = tk.PhotoImage(master=self.root, data=capsule_png(width, height, fill), format="PNG")
+            name = str(image)
+            self.badge_images[key] = image
+            # Keep the exact pixel coverage when the rest of the canvas is scaled.
+            self.ui.images[name] = image
+            self.transition.opacity_sources[name] = (
+                lambda opacity: capsule_png(width, height, fill, opacity=opacity)
+            )
+        return {"image": str(self.badge_images[key])}
+
+    def live_badge(self, canvas, group, x, y, height, fill):
+        style = self.badge_style(fill, height)
+        item = canvas.create_image(x, y, tags="status_badge", **style)
+        self.live.link(group, "badge_bg", canvas, (item,), **style)
 
     def live_battery(self, canvas, group, name, x, y, level, charging=False):
         item = battery_icon(canvas, x, y, level, charging)
         physical = str(self.ui.image(canvas.itemcget(item, "image")))
         self.live.link(group, name, canvas, (item,), image=physical)
 
-    def live_components(self, canvas, group, x, y, reading, *, size=13):
-        styles = self.reading_styles(group, reading)
-        for index, (part, label) in enumerate((("left", "左耳"), ("right", "右耳"), ("case", "充电仓"))):
-            row_y = y + index * 45
-            value = ((reading.components or {}).get(part) or {}) if not reading.error else {}
-            canvas.create_text(x, row_y, text=label, anchor="w", fill=MUTED, font=(FONT, 10))
-            self.live_battery(canvas, group, part+"_battery", x+46, row_y-7,
-                              value.get("level"), value.get("charging") is True)
-            self.live_text(canvas, group, part+"_level", x+86, row_y, anchor="w",
-                           font=(FONT, size, "bold"), **styles[part+"_level"])
-            self.live_text(canvas, group, part+"_time", x, row_y+19, anchor="w",
-                           font=(FONT, 10), **styles[part+"_time"])
-
     def reading_styles(self, key, reading):
         known_parts = not reading.error and any(
             part.get("level") is not None for part in (reading.components or {}).values())
         online = reading.connected is True or reading.ok or known_parts
         if online and reading.status == "待适配电量":
-            state, color = "电量待适配", "#997126"
+            state, color = "电量待适配", self.color(theme.WARNING)
         elif reading.error:
-            state, color = ("读取暂不可用", "#aa5d65") if online else ("未连接", MUTED)
+            state, color = ("读取暂不可用", self.color(theme.DANGER)) if online else ("未连接", self.color(theme.MUTED))
         elif reading.ok or known_parts:
-            state, color = component_charging_text(reading.components) or reading.status or "设备在线", "#5755d9"
+            state, color = component_charging_text(reading.components) or reading.status or "设备在线", self.color(theme.ACCENT)
         elif reading.status in ("待适配电量", "未上报电量"):
-            state, color = reading.status, "#997126"
+            state, color = reading.status, self.color(theme.WARNING)
         else:
-            state, color = "读取中", MUTED
+            state, color = "读取中", self.color(theme.MUTED)
         charging = reading.status in ("charging", "充电中")
         power = "正在充电" if charging else "已充满" if reading.status in ("full", "已充满") else "电池供电"
         if reading.status == "已接电，未充电":
@@ -802,44 +801,36 @@ class NexusPanel:
         elif reading.source == "Windows 蓝牙" and reading.ok:
             caption = "来自系统蓝牙上报"
         values = {
-            "badge_bg": {"fill": GREEN_SOFT if online else "#f0f1f3"},
+            "badge_bg": {"fill": self.color(theme.ONLINE_SURFACE if online else OFFLINE_BADGE)},
             "badge": {"text": "已连接" if online else "未连接" if reading.error else "读取中",
-                      "fill": "#5755d9" if online else MUTED},
+                      "fill": self.color(theme.HEALTHY if online else theme.MUTED)},
             "state": {"text": "●  " + state, "fill": color},
             "status": {"text": state, "fill": color},
             "status_dot": {"fill": color},
-            "level": {"text": reading.display_level if reading.ok else "--", "fill": TEXT if reading.ok else MUTED},
-            "power": {"text": power, "fill": TEXT},
-            "caption": {"text": caption, "fill": MUTED},
-            "timestamp": {"text": self.reading_times.label(key, reading), "fill": MUTED},
-            "runtime": {"fill": "#5755d9" if reading.ok else MUTED},
-            "detail": {"text": reading.error or reading.detail or "等待设备电量回复", "fill": MUTED},
+            "level": {"text": reading.display_level if reading.ok else "--", "fill": self.color(theme.TEXT) if reading.ok else self.color(theme.MUTED)},
+            "power": {"text": power, "fill": self.color(theme.TEXT)},
+            "caption": {"text": caption, "fill": self.color(theme.MUTED)},
+            "timestamp": {"text": self.reading_times.label(key, reading), "fill": self.color(theme.MUTED)},
+            "runtime": {"fill": self.color(theme.ACCENT) if reading.ok else self.color(theme.MUTED)},
+            "detail": {"text": reading.error or reading.detail or "等待设备电量回复", "fill": self.color(theme.MUTED)},
         }
         for part in ("left", "right", "case"):
             value = ((reading.components or {}).get(part) or {}) if not reading.error else {}
             level = value.get("level")
             values[part+"_level"] = {"text": f"{level}%" if level is not None else "--",
-                                     "fill": "#5755d9" if value.get("charging") is True else TEXT if level is not None else MUTED}
-            values[part+"_time"] = {"text": self.reading_times.label(key, reading, part), "fill": MUTED}
+                                     "fill": self.color(theme.ACCENT) if value.get("charging") is True else self.color(theme.TEXT) if level is not None else self.color(theme.MUTED)}
+            values[part+"_time"] = {"text": self.reading_times.label(key, reading, part), "fill": self.color(theme.MUTED)}
         return values
 
     def header_styles(self):
         if not self.device_entries():
-            return {"badge_bg": {"fill": "#f0f1f3"}, "dot": {"fill": MUTED},
-                    "badge": {"text": "暂无设备", "fill": MUTED}}
-        if self.view_mode == "all":
-            count = sum(reading.ok or reading.connected is True for reading in self.readings.values())
-            online, label = count > 0, f"{count}/{len(self.device_entries())} 在线"
-        else:
-            online = self.reading.connected if self.reading.connected is not None else self.reading.ok
-            label = "已连接" if online else "设备离线"
-            if self.busy:
-                label = "检查中"
-            elif self.current_device() and self.reading.connected is None:
-                label = "状态未知"
-        return {"badge_bg": {"fill": GREEN_SOFT if online else "#f0f1f3"},
-                "dot": {"fill": GREEN if online else MUTED},
-                "badge": {"text": label, "fill": "#5755d9" if online else MUTED}}
+            return {"badge_bg": {"fill": self.color(OFFLINE_BADGE)}, "dot": {"fill": self.color(theme.MUTED)},
+                    "badge": {"text": "暂无设备", "fill": self.color(theme.MUTED)}}
+        count = sum(reading.ok or reading.connected is True for reading in self.readings.values())
+        online, label = count > 0, f"{count}/{len(self.device_entries())} 在线"
+        return {"badge_bg": {"fill": self.color(theme.ONLINE_SURFACE if online else OFFLINE_BADGE)},
+                "dot": {"fill": self.color(theme.HEALTHY if online else theme.MUTED)},
+                "badge": {"text": label, "fill": self.color(theme.HEALTHY if online else theme.MUTED)}}
 
     def refresh_readings(self):
         if not getattr(self, "live", None) or not self.live.bindings:
@@ -849,12 +840,15 @@ class NexusPanel:
             self.reading_times.observe(key, reading)
         if self.transition.active:
             return
-        self.live.apply("header", self.header_styles())
+        header = self.header_styles()
+        header["badge_bg"] = self.badge_style(header["badge_bg"]["fill"], HEADER_BADGE_HEIGHT)
+        self.live.apply("header", header)
         for key in self.visible_devices:
             reading = self.readings.get(key)
             if reading is None:
                 continue
             values = self.reading_styles(key, reading)
+            values["badge_bg"] = self.badge_style(values["badge_bg"]["fill"], DEVICE_BADGE_HEIGHT)
             for part in (None, "left", "right", "case"):
                 name = part+"_battery" if part else "battery"
                 binding = self.live.bindings.get((key, name))
@@ -869,9 +863,9 @@ class NexusPanel:
                     charging = not reading.error and reading.status in ("charging", "充电中")
                 source = battery_photo(canvas, level, charging)
                 values[name] = {"image": str(self.ui.image(str(source)))}
-            if self.view_mode == "single":
-                values["detail"]["text"] = clipped_label(self.canvas, values["detail"]["text"].replace("\n", " "),
-                                                         (FONT, 10), self.detail_width)
+                gauge = getattr(self, "battery_gauges", {}).get((key, part))
+                if gauge is not None:
+                    self.update_battery_gauge(gauge, level, charging)
             self.live.apply(key, values)
         self.update_runtime_display()
 
@@ -883,329 +877,178 @@ class NexusPanel:
             pass
 
     def draw_steps(self):
-        if not self.canvas.winfo_exists():
+        if not self.canvas.winfo_exists() or self.transition.phase == "out":
             return
-        if self.transition.phase == "out":
-            return
+        entries = self.device_entries()
+        top = OVERVIEW_TOP
+        body_height = content_height(len(entries))
+        self.resize_to_content(top + body_height + FOOTER_HEIGHT)
+        w, h = (self.ui.logical(value) for value in self._layout_size)
+        viewport = h - top - FOOTER_HEIGHT
         self.transition.begin_layout()
-        yield
         self.live.bindings.clear()
-        yield
+        self.battery_gauges = {}
         self.visible_devices = {}
         self.reading_times.retain(set(self.readings))
-        yield
         for key, reading in self.readings.items():
             self.reading_times.observe(key, reading)
             yield
-        w, h = LAYOUT_WIDTH, LAYOUT_HEIGHT
         self.display_photos = []
+        self.overview_runtime_items.clear()
         self.canvas.delete("all")
-        yield
-        self.canvas.create_rectangle(0, 0, w, h, fill=BG, outline="")
-        yield
-
-        # header
-        self.canvas.create_image(24, 21, image=self.brand_photo, anchor="nw", tags="shape")
-        yield
-        self.canvas.create_text(69, 29, text="Nexus", anchor="w", fill=TEXT,
-                               font=(FONT, 15, "bold"), tags="shape")
-        yield
-        self.canvas.create_text(69, 48, text="外设电量中心", anchor="w", fill=MUTED,
-                               font=(FONT, 10), tags="shape")
+        self.overview_canvas.delete("all")
         yield
 
-        self.ui.place(self.receiver_button, x=w - 420, y=21, width=118, height=34)
+        canvas = self.canvas
+        canvas.create_rectangle(0, 0, w, h, fill=self.color(theme.BACKGROUND), outline="")
+        canvas.create_image(0, 0, image=self.chrome_image("ambient-header.png"), anchor="nw")
+        canvas.create_image(17, 15, image=self.chrome_image("nexus-chrome.png"), anchor="nw")
+        canvas.create_text(79, 30, text="Nexus", anchor="w", fill=self.color(theme.TEXT),
+                           font=("Segoe UI", 21, "bold"))
+        canvas.create_text(80, 52, text="外设电量中心", anchor="w", fill=self.color(theme.MUTED), font=(FONT, 10))
+        canvas.create_text(w - 271, 39, text="主题", anchor="e", fill=self.color(theme.MUTED), font=(FONT, 10))
+        self.ui.place(self.theme_picker, x=w - 259, y=20)
         yield
-        self.ui.place(self.refresh_button, x=w - 289, y=17, width=104, height=42)
-        yield
-        status_x = w - 179
-        device = self.current_device()
-        yield
+
+        rounded_rect(canvas, 16, 71, w - 16, 118, 16, self.color(theme.SURFACE),
+                     outline=self.color(theme.LINE), tags="view_toolbar")
+        canvas.create_text(32, 94, text="设备总览", anchor="w", fill=self.color(theme.TEXT),
+                           font=(FONT, 13, "bold"))
+        self.ui.place(self.receiver_button, x=w - 231, y=77)
+        self.ui.place(self.refresh_button, x=w - 124, y=74, width=104, height=42)
         header = self.header_styles()
+        status_x = w - 103
+        self.live_badge(canvas, "header", status_x + BADGE_WIDTH/2, 39,
+                        HEADER_BADGE_HEIGHT, header["badge_bg"]["fill"])
+        dot = canvas.create_oval(status_x + 10, 36, status_x + 16, 42, outline="", **header["dot"])
+        self.live.link("header", "dot", canvas, (dot,), **header["dot"])
+        self.live_text(canvas, "header", "badge", status_x + 22, 39,
+                       anchor="w", font=(FONT, 9, "bold"), **header["badge"])
         yield
-        self.live_round(self.canvas, "header", "badge_bg", status_x, 21, status_x + 90, 55, 17,
-                         header["badge_bg"]["fill"])
-        yield
-        dot = self.canvas.create_oval(status_x + 13, 33, status_x + 19, 39,
-                                      outline="", tags="shape", **header["dot"])
-        yield
-        self.live.link("header", "dot", self.canvas, (dot,), **header["dot"])
-        yield
-        self.live_text(self.canvas, "header", "badge", status_x + 28, 38,
-                        anchor="w", font=(FONT, 9, "bold"), tags="shape", **header["badge"])
-        yield
-
-        self.canvas.create_image(24, 75, image=self.toolbar_photo, anchor="nw", tags="shape")
-        yield
-        self.canvas.create_line(272, 86, 272, 108, fill="#e5e9ef", width=1, tags="shape")
-        yield
-        self.ui.place(self.view_switcher, x=36, y=78, width=224, height=38)
-        yield
-        self.view_switcher.set_items((("all", "全部设备", "all"), ("single", "单个设备", "single")), self.view_mode)
-        yield
-        if not self.device_entries():
-            self.overview_runtime_items = {}
-            self.overview_hits = []
-            self.device_switcher.place_forget()
-            yield
-            self.remove_device_button.place_forget()
-            yield
-            self.overview_label.place_forget()
-            yield
-            self.card_hover.suspend()
-            yield
-            self.overview_canvas.place_forget()
-            yield
-            self.overview_scrollbar.place_forget()
-            yield
-            draw_card_surface(self.canvas, 24, 120, w-24, h-52)
-            yield
-            self.canvas.create_text(w/2, 294, text="还没有加入设备", fill=TEXT, font=(FONT, 22, "bold"))
-            yield
-            self.canvas.create_text(w/2, 343, text="点击右上方“搜索设备”，选择需要查看的外设加入。", fill=MUTED, font=(FONT, 12))
-            yield
-            self.draw_footer(w, h)
-            yield
-            yield from self.ui.canvas_steps(self.canvas)
-            yield
-            self.transition.register(self.canvas, ())
-            yield
-            return
-        if self.view_mode == "all":
-            self.device_switcher.place_forget()
-            yield
-            self.remove_device_button.place_forget()
-            yield
-            self.overview_label.configure(text=f"共 {len(self.device_entries())} 台设备 · 点击卡片查看单个设备")
-            yield
-            self.ui.place(self.overview_label, x=284, y=82, width=410, height=30)
-            yield
-            self.ui.place(self.overview_canvas, x=0, y=120, width=w, height=h - 168)
-            yield
-            yield from self.draw_overview_steps(w, h - 168)
-            yield
-            self.draw_footer(w, h)
-            yield
-            yield from self.ui.canvas_steps(self.canvas)
-            yield
-            return
-        self.overview_label.place_forget()
-        yield
-        self.card_hover.suspend()
-        yield
-        self.overview_canvas.place_forget()
-        yield
-        self.overview_scrollbar.place_forget()
-        yield
-        self.ui.place(self.device_switcher, x=284, y=78, width=600, height=38)
-        yield
-        self.ui.place(self.remove_device_button, x=w-124, y=82, width=90, height=30)
-        yield
-
-        # card and left information panel
-        card_x1, card_y1, card_x2, card_y2 = 24, 120, w - 24, h - 52
-        draw_card_surface(self.canvas, card_x1, card_y1, card_x2, card_y2)
-        yield
-        panel_x1, panel_y1, panel_x2, panel_y2 = card_x1 + 16, card_y1 + 12, card_x1 + 278, card_y2 - 10
-        rounded_rect(self.canvas, panel_x1, panel_y1, panel_x2, panel_y2, 18,
-                     "#f7f8fc", tags="shape")
-        rounded_rect(self.canvas, panel_x2 + 20, card_y1 + 24, card_x2 - 20, card_y2 - 66,
-                     22, "#fafafe", tags="shape")
-        yield
-        body_before = set(self.canvas.find_all())
-        yield
-        key = self.selected_device_id
-        self.visible_devices[key] = device
-        styles = self.reading_styles(key, self.reading)
-        yield
-
-        maker = device.manufacturer if device else "AULA"
-        if is_bluetooth(device) and maker == "未提供":
-            maker = "Beats" if product_kind(device) == "beats-studio-buds" else "Bluetooth"
-        model = device.model if device else "F87 Pro"
-        short_maker = maker[:14] + "…" if len(maker) > 14 else maker
-        short_model = model[:18] + "…" if len(model) > 18 else model
-        self.canvas.create_text(panel_x1 + 26, panel_y1 + 38, text=short_maker, anchor="w",
-                               fill=TEXT, font=("Segoe UI", 22 if device else 31, "bold"), tags="shape")
-        yield
-        self.canvas.create_text(panel_x1 + 26, panel_y1 + 74, text=short_model, anchor="w",
-                               fill="#5d6168", font=(FONT, 14 if device else 18), tags="shape")
-        yield
-        self.canvas.create_text(panel_x1 + 26, panel_y1 + 106,
-                               text=device.hardware_id if device else "狼蛛无线键盘", anchor="w",
-                               fill=MUTED, font=(FONT, 10), tags="shape")
-        yield
-
-        level = self.reading.level
-        charging = self.reading.status in ("charging", "充电中")
-        component_layout = product_kind(device) == "beats-studio-buds"
-        shown_level = 100 if charging and level is None and self.reading.ok else level
-        if component_layout:
-            self.live_components(self.canvas, key, panel_x1 + 27, panel_y1 + 137, self.reading, size=12)
-            yield
-        else:
-            self.live_battery(self.canvas, key, "battery", panel_x1 + 24, panel_y1 + 147, shown_level, charging)
-            yield
-            self.live_text(self.canvas, key, "level", panel_x1 + 72, panel_y1 + 155,
-                             anchor="w", font=("Segoe UI", 26, "bold"), tags="shape", **styles["level"])
-            yield
-        self.runtime_text_item = self.runtime_hint_item = self.runtime_hint_detail_item = None
-        if key == DEFAULT_DEVICE_ID:
-            self.canvas.create_text(panel_x1 + 27, panel_y1 + 202, text="预计剩余使用时长",
-                                     anchor="w", fill=MUTED, font=(FONT, 10), tags="shape")
-            yield
-            self.runtime_text_item = self.live_text(self.canvas, key, "runtime", panel_x1 + 27, panel_y1 + 225,
-                                                     anchor="w", font=(FONT, 11, "bold"), tags="shape", **styles["runtime"])
-            yield
-            self.runtime_hint_item = self.canvas.create_text(panel_x2 + 24, panel_y2 - 18,
-                                                               anchor="w", fill=MUTED, font=(FONT, 9), tags="shape")
-            yield
-            self.runtime_hint_detail_item = self.canvas.create_text(panel_x2 + 24, panel_y2 - 18,
-                                                                      anchor="w", fill=MUTED, font=(FONT, 9), tags="shape")
-            yield
-            self.update_runtime_display()
-            yield
-
-        # 跟随上方设备信息定位，避免窗口增高时被推到卡片底部。
-        details_y = panel_y1 + (281 if component_layout else 270 if key == DEFAULT_DEVICE_ID else 220)
-        self.canvas.create_text(panel_x1 + 27, details_y, text="连接方式",
-                               anchor="w", fill=MUTED, font=(FONT, 10), tags="shape")
-        yield
-        draw_wireless_icon(self.canvas, panel_x1 + 27, details_y + 18.5)
-        yield
-        self.canvas.create_text(panel_x1 + 54, details_y + 27,
-                               text=connection_text(device),
-                               anchor="w", fill=TEXT, font=(FONT, 10, "bold"), tags="shape")
-        yield
-        self.canvas.create_text(panel_x1 + 27, details_y + 52, text="供电状态",
-                               anchor="w", fill=MUTED, font=(FONT, 10), tags="shape")
-        yield
-        self.live_text(self.canvas, key, "power", panel_x1 + 27, details_y + 72,
-                         anchor="w", font=(FONT, 11, "bold"), tags="shape", **styles["power"])
-        yield
-        self.live_text(self.canvas, key, "timestamp", panel_x1 + 27, panel_y2 - 48,
-                         anchor="w", font=(FONT, 10), tags="shape", **styles["timestamp"])
-        yield
-        self.live_text(self.canvas, key, "status_dot", panel_x1 + 30, panel_y2 - 18,
-                         text="●", font=("Segoe UI", 7), tags="shape", **styles["status_dot"])
-        yield
-        self.live_text(self.canvas, key, "status", panel_x1 + 40, panel_y2 - 18,
-                         anchor="w", font=(FONT, 10, "bold"), tags="shape", **styles["status"])
-        yield
-
-        # 将产品图与说明作为整体，在右侧内容区水平、垂直居中。
-        content_left, content_right = panel_x2 + 24, card_x2 - 24
-        content_top, content_bottom = card_y1 + 40, card_y2 - 56
-        available_width = content_right - content_left
-        available_height = content_bottom - content_top
-        content_center_x = (content_left + content_right) / 2
-        self.detail_width = available_width - 24
-        detail = clipped_label(self.canvas, styles["detail"]["text"].replace("\n", " "), (FONT, 10), self.detail_width)
-        yield
-        detail_item = self.live_text(self.canvas, key, "detail",
-            content_center_x, 0, text=detail, anchor="n", justify="center",
-            width=self.detail_width, fill=MUTED, font=(FONT, 10), tags="shape")
-        yield
-        detail_bounds = self.canvas.bbox(detail_item)
-        yield
-        detail_height = detail_bounds[3] - detail_bounds[1]
-        detail_gap = 14
-        kind = product_kind(device)
-        yield
-        photo = (self.fitted_product(product_image_kind(device), available_width - 18, available_height - detail_gap - detail_height)
-                 if device and kind in ("mouse", "beats-studio-buds") else None)
-        if product_image_kind(device) == "keyboard-v2d":
-            photo = self.fitted_product("keyboard-v2d", available_width - 18,
-                                        available_height - detail_gap - detail_height)
-            yield
-        elif product_image_kind(device) and product_image_kind(device).startswith("aula:"):
-            photo = self.fitted_product(product_image_kind(device), available_width - 18,
-                                        available_height - detail_gap - detail_height)
-            yield
-        if photo:
-            image_y = content_top + max(0, (available_height - photo.height() - detail_gap - detail_height) / 2)
-            self.canvas.create_image(content_center_x, image_y, image=photo, anchor="n", tags="shape")
-            yield
-            detail_y = image_y + photo.height() + detail_gap
-        elif is_bluetooth(device) and product_kind(device) != "keyboard":
-            center_y = (content_top + content_bottom) / 2 - 20
-            draw_bluetooth_symbol(self.canvas, content_center_x, center_y - 20)
-            yield
-            self.canvas.create_text(content_center_x, center_y + 95, text=device.model,
-                                    width=available_width - 24, font=(FONT, 16, "bold"), fill=TEXT, tags="shape")
-            yield
-            detail_y = center_y + 128
-        elif device and product_kind(device) != "keyboard":
-            center_y = (content_top + content_bottom) / 2 - 25
-            rounded_rect(self.canvas, content_center_x - 38, center_y - 65,
-                         content_center_x + 38, center_y + 35, 14, "#e5e8ed", outline="#c5cbd3")
-            yield
-            rounded_rect(self.canvas, content_center_x - 23, center_y - 88,
-                         content_center_x + 23, center_y - 55, 4, "#c8ced7")
-            yield
-            for offset in (-10, 10):
-                self.canvas.create_rectangle(content_center_x + offset - 3, center_y - 82,
-                                             content_center_x + offset + 3, center_y - 68,
-                                             fill="#f9fafb", outline="", tags="shape")
-                yield
-            self.canvas.create_text(content_center_x, center_y - 9, text="USB",
-                                    font=("Segoe UI", 16, "bold"), fill="#7c8592", tags="shape")
-            yield
-            self.canvas.create_text(content_center_x, center_y + 62, text=device.model,
-                                    width=available_width - 24, font=(FONT, 18, "bold"),
-                                    fill=TEXT, tags="shape")
-            yield
-            detail_y = center_y + 94
-        elif self.keyboard_photo_large:
-            photo = (self.keyboard_photo_large
-                     if available_width >= self.keyboard_photo_large.width() + 18
-                     and available_height >= self.keyboard_photo_large.height() + detail_gap + detail_height
-                     else self.keyboard_photo_small)
-            image_x = content_center_x - photo.width() / 2
-            group_height = photo.height() + detail_gap + detail_height
-            image_y = content_top + max(0, (available_height - group_height) / 2)
-            self.canvas.create_image(image_x, image_y, image=photo,
-                                     anchor="nw", tags="shape")
-            yield
-            detail_y = image_y + photo.height() + detail_gap
-        else:
-            image_width = min(560, available_width - 18)
-            yield
-            image_height = min(210, available_height - detail_gap - detail_height - 14)
-            yield
-            group_height = image_height + 14 + detail_gap + detail_height
-            image_y = content_top + (available_height - group_height) / 2
-            draw_keyboard(self.canvas, content_center_x - image_width / 2,
-                          image_y, image_width, image_height)
-            yield
-            detail_y = image_y + image_height + 14 + detail_gap
-        self.canvas.coords(detail_item, content_center_x, detail_y)
-        yield
-        rounded_rect(self.canvas, card_x2 - 76, card_y2 - 48, card_x2 - 24, card_y2 - 20,
-                     14, GREEN_SOFT, tags="shape")
-        yield
-        self.canvas.create_text(card_x2 - 50, card_y2 - 34, text="已加入" if device else "实时",
-                               fill=GREEN, font=(FONT, 9, "bold"), tags="shape")
-        yield
-
-        body_items = set(self.canvas.find_all()) - body_before
+        self.ui.place(self.overview_canvas, x=0, y=top, width=w, height=viewport)
+        self.set_content_scroll(w, top, viewport, body_height, "empty" if not entries else "overview")
         self.draw_footer(w, h)
+        yield from self.ui.canvas_steps(canvas)
         yield
-        yield from self.ui.canvas_steps(self.canvas)
-        yield
-        self.transition.register(self.canvas, body_items,
-                                 region=(0, self.ui.px(120), self.ui.px(w), self.ui.px(h-172)))
-        yield
+
+        body = self.overview_canvas
+        if not entries:
+            self.card_hover.suspend()
+            draw_card_surface(body, CARD_MARGIN, CARD_PADDING, w - CARD_MARGIN, body_height - CARD_PADDING)
+            body.create_text(w/2, body_height/2 - 15, text="还没有加入设备",
+                             fill=self.color(theme.TEXT), font=(FONT, 18, "bold"))
+            body.create_text(w/2, body_height/2 + 18, text="点击上方「搜索设备」添加外设",
+                             fill=self.color(theme.MUTED), font=(FONT, 11))
+            yield from self.ui.canvas_steps(body)
+            return
+        yield from self.draw_overview_steps(w, viewport, entries)
+
+    def set_content_scroll(self, width, top, viewport, content, mode):
+        canvas = self.overview_canvas
+        viewport_pixels = self.ui.px(viewport)
+        content_pixels = self.ui.px(content)
+        # Separate rounding of scaled rows can differ by one pixel.
+        self.overview_scrollable = content_pixels > viewport_pixels + 1
+        canvas.configure(scrollregion=(0, 0, self.ui.px(width),
+                                       content_pixels if self.overview_scrollable else viewport_pixels))
+        if self.overview_scrollable:
+            self.ui.place(self.overview_scrollbar, x=width - 13, y=top + 5, width=12, height=viewport - 10)
+        else:
+            self.overview_scrollbar.place_forget()
+        if not self.overview_scrollable or mode != self._content_mode:
+            canvas.yview_moveto(0)
+        self._content_mode = mode
 
     def draw_footer(self, w, h):
-        footer = self.canvas.create_text(w / 2, h - 20,
-                               text="Nexus 外设中心  ·  每台设备独立更新  ·",
-                               fill=MUTED, font=(FONT, 10), tags="shape")
         from update_client import current_version
-        self.canvas.create_text(self.canvas.bbox(footer)[2] + 8, h - 20, text="build " + current_version(), anchor="w",
-                               fill=ORANGE, font=(FONT, 9, "bold"), tags="shape")
-        self.canvas.create_text(w - 74, h - 20, text="设置",
-                               fill=MUTED, font=(FONT, 10), tags="settings")
+        y = h - FOOTER_HEIGHT / 2
+        self.canvas.create_text(20, y, text=f"Nexus · {current_version()}", anchor="w",
+                                fill=self.color(theme.MUTED), font=(FONT, 10))
+        self.ui.place(self.settings_button, x=w-86, y=y-14)
+
+    def draw_product(self, canvas, device, x, y, width, height):
+        kind = product_kind(device)
+        halo = "keyboard" if kind == "keyboard" else "mouse" if kind == "mouse" else "audio"
+        canvas.create_image(x, y, image=self.chrome_image(f"device-halo-{halo}.png"))
+        photo = self.fitted_product(product_image_kind(device), width, height)
+        if photo is not None:
+            canvas.create_image(x, y, image=photo, tags="product_photo")
+        elif is_bluetooth(device):
+            draw_bluetooth_symbol(canvas, x, y, min(width, height) / 190)
+        elif kind == "keyboard":
+            keyboard_width = min(width, height * 2.7)
+            draw_keyboard(canvas, x - keyboard_width/2, y - height*.28, keyboard_width, height*.56)
+        else:
+            rounded_rect(canvas, x - 20, y - 24, x + 20, y + 24, 11,
+                         self.color(theme.Color("#e5e8ed", "#424d67")))
+            canvas.create_text(x, y, text="USB", fill=self.color(theme.MUTED), font=(FONT, 11, "bold"))
+
+    def draw_card_name(self, canvas, device, key, styles, rect, *, info_right=None):
+        x1, y1, x2, _ = rect
+        badge_right = x2 - 19 if info_right is None else info_right
+        maker, model = (device.manufacturer, device.model) if device else ("AULA", "F87 Pro")
+        if is_bluetooth(device) and maker == "未提供":
+            maker = "Beats" if product_kind(device) == "beats-studio-buds" else "Bluetooth"
+        title_font = ("Segoe UI", 18, "bold")
+        maker_width = badge_right - x1 - 115
+        title_width = x2 - x1 - 134 if info_right is None else info_right - x1 - 20
+        canvas.create_text(x1 + 20, y1 + 23, anchor="w", font=(FONT, 10), fill=self.color(theme.MUTED),
+                           text=clipped_label(canvas, maker, (FONT, 10), maker_width))
+        canvas.create_text(x1 + 20, y1 + 51, anchor="w", font=title_font, fill=self.color(theme.TEXT),
+                           text=clipped_label(canvas, model, title_font, title_width))
+        badge_y = y1 + (31 if info_right is None else 24)
+        badge_center = badge_right - BADGE_WIDTH/2
+        self.live_badge(canvas, key, badge_center, badge_y, DEVICE_BADGE_HEIGHT, styles["badge_bg"]["fill"])
+        self.live_text(canvas, key, "badge", badge_center, badge_y, font=(FONT, 9, "bold"), **styles["badge"])
+
+    def draw_card_battery(self, canvas, key, reading, styles, x, y, width, *, component_layout):
+        if component_layout:
+            for index, (part, label) in enumerate((("left", "左耳"), ("right", "右耳"), ("case", "充电仓"))):
+                px = x + index * (width / 3)
+                value = ((reading.components or {}).get(part) or {}) if not reading.error else {}
+                canvas.create_text(px, y, text=label, anchor="w", fill=self.color(theme.MUTED), font=(FONT, 9))
+                self.live_battery(canvas, key, part + "_battery", px, y + 16,
+                                  value.get("level"), value.get("charging") is True)
+                self.live_text(canvas, key, part + "_level", px + 38, y + 24, anchor="w",
+                               font=("Segoe UI", 13, "bold"), **styles[part + "_level"])
+                self.live_text(canvas, key, part + "_time", px, y + 45, anchor="w",
+                               font=(FONT, 8), **styles[part + "_time"])
+                self.draw_battery_gauge(canvas, key, part, px, y + 55, width / 3 - 12,
+                                        value.get("level"), value.get("charging") is True)
+        else:
+            canvas.create_text(x, y, text="剩余电量", anchor="w", fill=self.color(theme.MUTED), font=(FONT, 10))
+            charging = not reading.error and reading.status in ("charging", "充电中")
+            self.live_battery(canvas, key, "battery", x, y + 17, reading.level if not reading.error else None, charging)
+            self.live_text(canvas, key, "level", x + 45, y + 24, anchor="w",
+                           font=("Segoe UI", 26, "bold"), **styles["level"])
+            self.draw_battery_gauge(canvas, key, None, x, y+47, min(width, 185),
+                                    reading.level if not reading.error else None, charging)
+
+    def battery_tone(self, level, charging):
+        role = theme.ACCENT if charging else theme.DANGER if level < 20 else theme.WARNING if level < 40 else theme.HEALTHY
+        return self.color(role)
+
+    def draw_battery_gauge(self, canvas, key, part, x, y, width, level, charging):
+        canvas.create_line(x, y, x+width, y, fill=self.color(theme.LINE), width=3, capstyle="round")
+        span = width * (level or 0) / 100
+        fill = self.battery_tone(level or 0, charging)
+        item = canvas.create_line(x, y, x+span, y, fill=fill, width=3, capstyle="round",
+                                  state="normal" if level else "hidden")
+        self.battery_gauges[key, part] = canvas, item, width
+
+    def update_battery_gauge(self, gauge, level, charging):
+        canvas, item, width = gauge
+        x, y, old_end, _ = canvas.coords(item)
+        fill = self.battery_tone(level or 0, charging)
+        end = x + self.ui.px(width * (level or 0) / 100)
+        if abs(old_end - end) >= 1:
+            canvas.coords(item, x, y, end, y)
+        state = "normal" if level else "hidden"
+        if canvas.itemcget(item, "state") != state:
+            canvas.itemconfigure(item, state=state)
+        if canvas.itemcget(item, "fill") != fill:
+            canvas.itemconfigure(item, fill=fill)
+            self.transition.update_style(canvas, item, fill=fill)
 
     def fitted_product(self, kind, max_width, max_height, clockwise=False):
         import tkinter as tk
@@ -1258,183 +1101,126 @@ class NexusPanel:
         self.display_photos.append(photo)
         return photo
 
-    def draw_overview(self, width, viewport_height):
-        for _ in self.draw_overview_steps(width, viewport_height):
-            pass
-
-    def draw_overview_steps(self, width, viewport_height):
+    def draw_overview_steps(self, width, viewport_height, entries):
         canvas = self.overview_canvas
-        canvas.delete("all")
-        yield
-        entries = self.device_entries()
-        yield
-        rectangles, content_height = card_rectangles(width, viewport_height, len(entries))
-        yield
-        canvas.configure(scrollregion=(0, 0, self.ui.px(width), self.ui.px(content_height)))
-        yield
-        self.overview_scrollable = content_height > viewport_height + 1
-        if self.overview_scrollable:
-            self.ui.place(self.overview_scrollbar, x=width - 14, y=132, width=12, height=viewport_height - 24)
-            yield
-        else:
-            self.overview_scrollbar.place_forget()
-            yield
-            canvas.yview_moveto(0)
-            yield
-        self.overview_runtime_items = {}
-        self.overview_hits = []
-        motion_items = set()
-        yield
         hover_cards = []
-        for (device_id, device), rect in zip(entries, rectangles):
+        motion_items = set()
+        for (key, device), rect in zip(entries, card_rectangles(width, len(entries))):
             x1, y1, x2, y2 = rect
-            self.visible_devices[device_id] = device
-            self.overview_hits.append((rect, device_id))
-            yield
-            reading = self.readings.get(device_id, Reading(device.label if device else KEYBOARD_TITLE, "正在读取…"))
-            yield
-            styles = self.reading_styles(device_id, reading)
-            yield
-            card_before = set(canvas.find_all())
-            yield
+            art_width = min(274, (x2 - x1) * .39)
+            art_right = x2 - 14
+            art_left = art_right - art_width
+            art_top, art_bottom = y1 + 12, y2 - 43
+            info_right = art_left - 14
+            self.visible_devices[key] = device
+            reading = self.readings.get(key, Reading(device.label if device else KEYBOARD_TITLE, "正在读取…"))
+            styles = self.reading_styles(key, reading)
+            previous = set(canvas.find_all())
             surface = draw_card_surface(canvas, x1, y1, x2, y2)
+            self.draw_card_name(canvas, device, key, styles, rect, info_right=info_right)
             yield
-            body_before = set(canvas.find_all())
+            x = x1 + 20
+            component_layout = product_kind(device) == "beats-studio-buds"
+            meter_width = info_right - x
+            self.draw_card_battery(canvas, key, reading, styles, x, y1 + 81, meter_width,
+                                   component_layout=component_layout)
+            if not component_layout:
+                self.live_text(canvas, key, "state", x, y1+147, anchor="w",
+                               font=(FONT, 9), **styles["state"])
             yield
-            maker, model = (device.manufacturer, device.model) if device else ("AULA", "F87 Pro")
-            if is_bluetooth(device) and maker == "未提供":
-                maker = "Beats" if product_kind(device) == "beats-studio-buds" else "Bluetooth"
-            card_width, card_height = x2 - x1, y2 - y1
-            compact = card_width < 440
-            title_font = (FONT, 16 if compact else 18, "bold")
-            canvas.create_text(x1 + 24, y1 + 28,
-                               text=clipped_label(canvas, maker, (FONT, 10), card_width - 158),
-                               anchor="w", fill=MUTED, font=(FONT, 10))
-            yield
-            canvas.create_text(x1 + 24, y1 + 65, text=clipped_label(canvas, model, title_font, card_width - 48),
-                               anchor="w", fill=TEXT, font=title_font)
-            yield
-            self.live_round(canvas, device_id, "badge_bg", x2 - 110, y1 + 20, x2 - 24, y1 + 48, 14,
-                              styles["badge_bg"]["fill"])
-            yield
-            self.live_text(canvas, device_id, "badge", x2 - 67, y1 + 34,
-                             font=(FONT, 9, "bold"), **styles["badge"])
-            yield
-            # 横向产品舞台与底部数据区各自占用固定区域。
-            image_width, image_height = card_width - 70, 112
-            image_center_x, image_center_y = (x1 + x2) / 2, y1 + 160
-            kind = product_kind(device)
-            if not compact and kind == "keyboard":
-                image_width, image_height = min(card_width - 360, 620), 260
-                image_center_x, image_center_y = x1 + card_width * .58, y1 + 205
-            yield
-            photo = self.fitted_product(product_image_kind(device), image_width, image_height,
-                                        clockwise=False) if kind else None
-            if photo:
-                canvas.create_image(image_center_x, image_center_y, image=photo)
-                yield
-            elif is_bluetooth(device):
-                draw_bluetooth_symbol(canvas, image_center_x, image_center_y)
-                yield
+            if theme.is_dark(canvas):
+                draw_card_surface(canvas, art_left, art_top, art_right, art_bottom, product=True)
             else:
-                rounded_rect(canvas, image_center_x - 36, image_center_y - 60,
-                             image_center_x + 36, image_center_y + 52, 16, "#e5e8ed")
-                yield
-                canvas.create_text(image_center_x, image_center_y, text="USB", fill="#8e97a4", font=(FONT, 15, "bold"))
-                yield
-            mx, my = x1 + 24, y1 + 252
-            charging = not reading.error and reading.status in ("charging", "充电中")
-            if kind == "beats-studio-buds":
-                column_width = (card_width - 48) / 3
-                for index, (part, label) in enumerate((("left", "左耳"), ("right", "右耳"), ("case", "充电仓"))):
-                    px = mx + index * column_width
-                    value = ((reading.components or {}).get(part) or {}) if not reading.error else {}
-                    canvas.create_text(px, my, text=label, anchor="w", fill=MUTED, font=(FONT, 9))
-                    self.live_text(canvas, device_id, part + "_level", px + 38, my + 34,
-                                   anchor="w", font=("Segoe UI", 16, "bold"), **styles[part + "_level"])
-                    self.live_battery(canvas, device_id, part + "_battery", px, my + 25,
-                                      value.get("level"), value.get("charging") is True)
-                    self.live_text(canvas, device_id, part + "_time", px, my + 82,
-                                   anchor="w", font=(FONT, 8), **styles[part + "_time"])
-                    yield
+                rounded_rect(canvas, art_left, art_top, art_right, art_bottom, 17, "#f3eff7")
+            self.draw_product(canvas, device, (art_left+art_right)/2, (art_top+art_bottom)/2,
+                              art_width - 22, art_bottom - art_top - 10)
+            caption_x = x if component_layout else x + 110
+            self.live_text(canvas, key, "caption", caption_x, y1 + 149, anchor="w",
+                           font=(FONT, 9), **styles["caption"])
+            yield
+            canvas.create_line(x, y2 - 36, x2 - 20, y2 - 36, fill=self.color(theme.LINE))
+            self.live_text(canvas, key, "timestamp", x, y2 - 18, anchor="w",
+                           font=(FONT, 9), **styles["timestamp"])
+            canvas.create_text(x1 + (x2-x1)*.43, y2 - 18, text=connection_text(device),
+                               fill=self.color(theme.MUTED), font=(FONT, 9))
+            if key == DEFAULT_DEVICE_ID:
+                self.overview_runtime_items[key] = self.live_text(
+                    canvas, key, "runtime", x2 - 100, y2 - 18, anchor="e", font=(FONT, 9), **styles["runtime"])
             else:
-                canvas.create_text(mx, my, text="剩余电量", anchor="w", fill=MUTED, font=(FONT, 10))
-                self.live_text(canvas, device_id, "level", mx + 48, my + 39,
-                               anchor="w", font=("Segoe UI", 26, "bold"), **styles["level"])
-                self.live_battery(canvas, device_id, "battery", mx, my + 31,
-                                  reading.level if not reading.error else None, charging)
-                self.live_text(canvas, device_id, "state", mx, my + 82,
-                               anchor="w", font=(FONT, 9), **styles["state"])
-                yield
-            info_y = y2 - 100
-            canvas.create_text(mx, info_y, text=connection_text(device), anchor="w",
-                               fill=TEXT, font=(FONT, 10, "bold"))
-            yield
-            if device_id == DEFAULT_DEVICE_ID:
-                self.overview_runtime_items[device_id] = self.live_text(
-                    canvas, device_id, "runtime", x2 - 24, info_y, text="暂不可用", anchor="e",
-                    font=(FONT, 10), **styles["runtime"])
-                yield
-            else:
-                self.live_text(canvas, device_id, "power", x2 - 24, info_y,
-                               anchor="e", font=(FONT, 9), **styles["power"])
-                yield
-            self.live_text(canvas, device_id, "caption", mx, y2 - 77,
-                             anchor="w", font=(FONT, 9), **styles["caption"])
-            yield
-            canvas.create_line(x1 + 24, y2 - 58, x2 - 24, y2 - 58, fill="#f0f1f4")
-            yield
-            self.live_text(canvas, device_id, "timestamp", x1 + 24, y2 - 31,
-                             anchor="w", font=(FONT, 10), **styles["timestamp"])
-            yield
-            canvas.create_text(x2 - 24, y2 - 31, text="查看单个 →", anchor="e", fill="#5d6878", font=(FONT, 9))
-            yield
-            motion_items.update(set(canvas.find_all()) - body_before)
-            yield
-            hover_cards.append((device_id, rect, set(canvas.find_all()) - card_before, surface))
+                self.live_text(canvas, key, "power", x2 - 100, y2 - 18, anchor="e",
+                               font=(FONT, 9), **styles["power"])
+            canvas.create_text(x2 - 20, y2 - 18, text="设备操作 ⋯", anchor="e",
+                               fill=self.color(theme.ACCENT), font=(FONT, 9, "bold"))
+            items = set(canvas.find_all()) - previous
+            motion_items.update(items - {surface})
+            hover_cards.append((key, rect, items, surface))
             yield
         self.update_runtime_display()
-        yield
         yield from self.ui.canvas_steps(canvas)
-        yield
         self.transition.register(canvas, motion_items,
                                  region=(0, 0, self.ui.px(width), self.ui.px(viewport_height)))
-        yield
         self.card_hover.register(hover_cards)
-        yield
+
+    def resize_to_content(self, wanted_height):
+        root = self.root
+        work, frame_width, frame_height = window_work_area(root, root)
+        left, top, right, bottom = work
+        max_width = max(1, min(self.ui.px(MAX_WIDTH), right-left-frame_width-2*WINDOW_MARGIN))
+        min_width = min(self.ui.px(MIN_WIDTH), max_width)
+        width = max(min_width, min(max_width, self._layout_size[0]))
+        height = min(self.ui.px(wanted_height), max(1, bottom-top-frame_height-2*WINDOW_MARGIN))
+        limits = min_width, max_width, height
+        if limits != self._size_limits:
+            root.minsize(min_width, height)
+            root.maxsize(max_width, height)
+            self._size_limits = limits
+        self._window_work_area = work
+        if (width, height) == self._layout_size:
+            return
+        self._layout_size = width, height
+        geometry = f"{width}x{height}"
+        if self._positioned:
+            x, y = root.winfo_x(), root.winfo_y()
+            right_edge = right - width - frame_width - WINDOW_MARGIN
+            bottom_edge = bottom - height - frame_height - WINDOW_MARGIN
+            old_bottom = y + root.winfo_height() + frame_height
+            if abs(old_bottom - (bottom - WINDOW_MARGIN)) <= WINDOW_MARGIN:
+                y = bottom_edge
+            x = max(left, min(x, right_edge))
+            y = max(top, min(y, bottom_edge))
+            geometry += f"+{x}+{y}"
+        root.geometry(geometry)
 
     def on_configure(self, event):
-        # Moving the native window emits Configure too; its content is unchanged.
-        if event.widget is self.root:
-            size = (event.width, event.height)
-            if size != getattr(self, "_layout_size", None):
-                self._layout_size = size
-                self.draw()
+        if event.widget is not self.root:
+            return
+        size = event.width, event.height
+        work = window_work_area(self.root, self.root)[0]
+        if size == self._layout_size and work == self._window_work_area:
+            return
+        self._layout_size = size
+        self._window_work_area = work
+        if self._geometry_after_id is not None:
+            self.root.after_cancel(self._geometry_after_id)
+        self._geometry_after_id = self.root.after(32, self.redraw_after_resize)
+
+    def redraw_after_resize(self):
+        self._geometry_after_id = None
+        self.transition.cancel()
+        self.card_hover.reset_assets()
+        self.draw()
 
     def place_initial_window(self):
-        """Place once in the primary work area, including native decorations."""
-        import ctypes
-        from ctypes import wintypes
-
+        """Anchor the initial panel inside the monitor's usable desktop."""
         self.root.update_idletasks()
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        user32.SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT, ctypes.c_void_p, wintypes.UINT]
-        user32.SystemParametersInfoW.restype = wintypes.BOOL
-        user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
-        user32.GetAncestor.restype = wintypes.HWND
-        user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
-        user32.GetWindowRect.restype = wintypes.BOOL
-        work = wintypes.RECT(0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
-        user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(work), 0)  # SPI_GETWORKAREA
-        frame = wintypes.RECT()
-        hwnd = user32.GetAncestor(self.root.winfo_id(), 2)  # GA_ROOT: includes title bar/borders
-        width, height = WINDOW_WIDTH, WINDOW_HEIGHT
-        if hwnd and user32.GetWindowRect(hwnd, ctypes.byref(frame)):
-            width = max(width, frame.right - frame.left)
-            height = max(height, frame.bottom - frame.top)
-        x = max(work.left, work.right - width - 16)
-        y = max(work.top, work.bottom - height - 16)
-        self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}+{x}+{y}")
+        self.draw()
+        self.root.update_idletasks()
+        (left, top, right, bottom), frame_width, frame_height = window_work_area(self.root, self.root)
+        width, height = self._layout_size
+        x = max(left, right - width - frame_width - WINDOW_MARGIN)
+        y = max(top, bottom - height - frame_height - WINDOW_MARGIN)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self._positioned = True
 
     def reveal_transition(self):
         canvases = self.canvas, self.overview_canvas
@@ -1452,47 +1238,43 @@ class NexusPanel:
         self.refresh_readings()
         self.card_hover.refresh_pointer()
 
-    def set_view_mode(self, mode):
-        if mode == self.view_mode:
-            return
-        try:
-            self.device_store.set_view_mode(mode)
-        except (OSError, ValueError) as exc:
-            self.show_device_error(str(exc))
-            return
-        self.view_mode = mode
-        view_switcher = getattr(self, "view_switcher", None)
-        if view_switcher is not None:
-            view_switcher.set_selected(mode)
-        hover = getattr(self, "card_hover", None)
-        if hover is not None:
-            hover.suspend()
-        if not self.busy:
-            self.refresh_button.set_state("idle")
-        self.transition.start()
-
     def overview_click(self, event):
+        if self.transition.active:
+            return
         x = self.ui.logical(self.overview_canvas.canvasx(event.x))
         y = self.ui.logical(self.overview_canvas.canvasy(event.y))
-        hovered = self.card_hover.hit(x, y)
-        for (x1, y1, x2, y2), device_id in self.overview_hits:
-            if device_id == hovered:
-                try:
-                    self.device_store.select(device_id)
-                except (OSError, ValueError) as exc:
-                    self.show_device_error(str(exc))
-                    return
-                self.selected_device_id = device_id
-                self.reading = self.readings[device_id]
-                self.update_device_choices()
-                self.set_view_mode("single")
-                return
+        device_id = self.card_hover.hit(x, y)
+        if device_id is None:
+            return
+        self.device_menu.delete(0, "end")
+        self.device_menu.add_command(label="查看设备信息", command=lambda: self.show_device_information(device_id))
+        self.device_menu.add_command(label="移除设备", command=lambda: self.remove_device(device_id))
+        try:
+            self.device_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.device_menu.grab_release()
 
-    def click(self, event):
-        w, h = LAYOUT_WIDTH, LAYOUT_HEIGHT
-        x, y = self.ui.logical(event.x), self.ui.logical(event.y)
-        if w - 118 <= x <= w - 28 and h - 42 <= y <= h:
-            self.open_settings()
+    def show_device_information(self, device_id):
+        from tkinter import messagebox
+
+        entries = dict(self.device_entries())
+        if device_id not in entries:
+            return
+        device = entries[device_id]
+        model = device.model if device else "AULA F87 Pro"
+        hardware = device.hardware_id if device else ""
+        reading = self.readings.get(device_id)
+        lines = [connection_text(device)]
+        if hardware:
+            lines.append(hardware)
+        if reading is not None:
+            styles = self.reading_styles(device_id, reading)
+            if reading.ok:
+                lines.append("电量 " + reading.display_level)
+            lines.extend((styles["status"]["text"], styles["power"]["text"], styles["detail"]["text"]))
+        messagebox.showinfo(model, "\n\n".join(lines), parent=self.root)
+
+    def end_drag(self, _event):
         self._drag = None
 
     def open_receiver_search(self):
@@ -1510,18 +1292,6 @@ class NexusPanel:
     def device_entries(self):
         return ([(DEFAULT_DEVICE_ID, None)] if getattr(self, "default_visible", True) else []) + [
             (d.id, d) for d in getattr(self, "saved_devices", [])]
-
-    def update_device_choices(self):
-        self.device_ids = [key for key, _device in self.device_entries()]
-        if self.selected_device_id not in self.device_ids:
-            self.selected_device_id = next(iter(self.device_ids), None)
-        entries = [(DEFAULT_DEVICE_ID, "F87 Pro", "keyboard")] if getattr(self, "default_visible", True) else []
-        for device in self.saved_devices:
-            kind = product_kind(device)
-            entries.append((device.id, "Studio Buds" if kind == "beats-studio-buds" else device.model, kind))
-        self.device_switcher.set_items(entries, self.selected_device_id)
-        enabled = self.selected_device_id in self.device_ids
-        self.remove_device_button.configure(state="normal" if enabled else "disabled", fg="#a45b65" if enabled else "#a4aab2")
 
     def show_device_error(self, message):
         from tkinter import messagebox
@@ -1544,23 +1314,13 @@ class NexusPanel:
         for saved in self.saved_devices:
             self.readings.setdefault(saved.id, Reading(saved.label, "正在读取…"))
         self.reading = self.readings.get(self.selected_device_id, Reading(device.label if device else KEYBOARD_TITLE, "正在检查…"))
-        self.update_device_choices()
-        # Device membership/selection changes the layout; normal readings do not.
-        self.draw()
+        # Ordinary battery readings update in place.
+        if self.root.winfo_viewable():
+            self.card_hover.suspend()
+            self.transition.start()
+        else:
+            self.draw()
         self.refresh()
-
-    def select_device(self, selected):
-        if selected not in self.device_ids or selected == self.selected_device_id:
-            return
-        try:
-            self.device_store.select(selected)
-            self.saved_devices, self.selected_device_id = self.device_store.load()
-        except (OSError, ValueError) as exc:
-            self.update_device_choices()
-            self.show_device_error(str(exc))
-            return
-        self.transition.start()
-        self.device_changed()
 
     def add_receiver(self, receiver):
         _, created = self.device_store.add(receiver)
@@ -1575,12 +1335,13 @@ class NexusPanel:
         self.root.lift()
         return created
 
-    def remove_selected_device(self):
-        if self.selected_device_id not in {key for key, _device in self.device_entries()}:
+    def remove_device(self, device_id):
+        entries = dict(self.device_entries())
+        if device_id not in entries:
             return
-        removed = self.current_device()
+        removed = entries[device_id]
         try:
-            self.device_store.remove(self.selected_device_id)
+            self.device_store.remove(device_id)
             discovery = getattr(self, "aula_discovery", None)
             if discovery is not None and removed is not None:
                 try:
@@ -1595,11 +1356,12 @@ class NexusPanel:
 
     def open_settings(self):
         if self.settings_window and self.settings_window.winfo_exists():
+            self.settings_window.select_page("settings")
             self.settings_window.show()
         else:
             from app_dialogs import SettingsDialog
             self.settings_window = SettingsDialog(self)
-        self.updates.open()
+        self.updates.check(manual=True)
 
 
     def open_updates(self):

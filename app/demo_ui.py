@@ -23,14 +23,8 @@ class MemoryStore:
     def load(self):
         return self.devices, self.selected
 
-    def view_mode(self):
-        return "all"
-
     def default_visible(self):
         return True
-
-    def set_view_mode(self, mode):
-        pass
 
     def select(self, key):
         self.selected = key
@@ -66,27 +60,22 @@ class DemoPanel(ui.NexusPanel):
         self.refresh_readings()
 
     def update_runtime_display(self):
-        if self.view_mode == "all":
-            item = self.overview_runtime_items.get(DEFAULT_DEVICE_ID)
-            if item is not None:
-                self.overview_canvas.itemconfigure(item, text="约 12 天可用")
-        elif self.selected_device_id == DEFAULT_DEVICE_ID:
-            self.canvas.itemconfigure(self.runtime_text_item, text="约 12 天可用")
-            self.canvas.itemconfigure(self.runtime_hint_item, text="模拟数据 · 本地预览")
-            self.canvas.itemconfigure(self.runtime_hint_detail_item, text="")
+        item = self.overview_runtime_items.get(DEFAULT_DEVICE_ID)
+        if item is not None:
+            self.overview_canvas.itemconfigure(item, text="约 12 天可用")
 
     def open_receiver_search(self):
         from app_dialogs import OverlayDialog
         OverlayDialog(self.root, "模拟设备已就绪", "演示模式不会搜索真实硬件或保存设备配置。", width=620, height=240)
 
-    def remove_selected_device(self):
+    def remove_device(self, _device_id):
         self.open_receiver_search()
 
     def open_settings(self):
         from app_dialogs import OverlayDialog, setting_row
         from toggle_switch import Switch
         dialog = OverlayDialog(self.root, "演示偏好", "本页仅演示交互，所有设置都保存在内存中。", width=720, height=430)
-        for title, description in (("动态效果", "设备切换与卡片悬停动画"), ("电量通知", "设备电量较低时提醒")):
+        for title, description in (("动态效果", "列表更新与卡片悬停动画"), ("电量通知", "设备电量较低时提醒")):
             variable = tk.BooleanVar(dialog, value=True)
             row = setting_row(dialog, dialog.inner, title, description, height=85)
             switch = Switch(row, variable, scale=dialog.scale)
@@ -95,7 +84,7 @@ class DemoPanel(ui.NexusPanel):
 
 def main():
     parser = argparse.ArgumentParser(description="Nexus 安全模拟界面")
-    parser.add_argument("--smoke", action="store_true", help="自动验证视图切换与动态绑定后退出")
+    parser.add_argument("--smoke", action="store_true", help="自动验证设备总览和电量更新后退出")
     parser.add_argument("--capture", help="将窗口截图保存为 PNG（仅 Windows）")
     args = parser.parse_args()
     with ExitStack() as stack:
@@ -128,26 +117,19 @@ def main():
                           f"$g.CopyFromScreen({x},{y},0,0,$b.Size); "
                           f"$b.Save('{target}',[System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()")
                 subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], check=True)
-        def check_single():
-            assert ("demo-audio", "left_level") in panel.live.bindings
-            panel.selected_device_id = "demo-audio"
-            panel.reading = panel.readings["demo-audio"]
-            panel.set_view_mode("single")
-            root.after(900, check_update)
         def check_update():
-            assert panel.view_mode == "single"
+            assert len(panel.visible_devices) == 3
             panel.readings["demo-audio"].components["left"]["level"] = 88
             panel.refresh_readings()
             binding = panel.live.bindings[("demo-audio", "left_level")]
             assert binding[0].itemcget(binding[1][0], "text") == "88%"
-            panel.set_view_mode("all")
-            root.after(900, finish)
+            finish()
         def finish():
             capture()
-            print("Tk smoke: 总览、单设备切换、耳机动态电量绑定均通过")
+            print("Tk smoke: 设备总览、耳机动态电量绑定均通过")
             panel.close()
         if args.smoke:
-            root.after(800, check_single)
+            root.after(800, check_update)
         elif args.capture:
             root.after(900, capture)
         root.mainloop()

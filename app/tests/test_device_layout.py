@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from device_layout import card_rectangles, fit_ppm, read_device_batch
+from device_layout import CARD_GAP, CARD_PADDING, card_rectangles, content_height, fit_ppm, read_device_batch
 from device_readers import Reading
 from saved_devices import DEFAULT_DEVICE_ID, DeviceStore
 
@@ -37,12 +37,11 @@ class BatchTests(unittest.TestCase):
         self.assertTrue(result[DEFAULT_DEVICE_ID].ok)
         self.assertEqual(len(result), 1)
 
-    def panel(self, mode="all", selected="mouse"):
+    def panel(self, selected="mouse"):
         from my_devices import NexusPanel
         panel = NexusPanel.__new__(NexusPanel)
         panel.refresh_generation = 1
         panel.selected_device_id = selected
-        panel.view_mode = mode
         panel.root, panel.refresh_button, panel.low_battery_notifier = Mock(), Mock(), Mock()
         panel.draw = Mock()
         return panel
@@ -54,46 +53,29 @@ class BatchTests(unittest.TestCase):
         self.assertIs(panel.reading, mouse)
         panel.low_battery_notifier.check.assert_called_once_with(keyboard)
 
-    def test_single_keyboard_failure_is_not_hidden_by_successful_mouse(self):
-        panel = self.panel(mode="single", selected=DEFAULT_DEVICE_ID)
+    def test_keyboard_failure_is_retained_when_another_device_succeeds(self):
+        panel = self.panel(selected=DEFAULT_DEVICE_ID)
         keyboard, mouse = Reading("Keyboard", "", error="unplugged"), Reading("Mouse", "", level=80)
         panel.finish_refresh({DEFAULT_DEVICE_ID: keyboard, "mouse": mouse}, 1)
         self.assertIs(panel.reading, keyboard)
-        panel.refresh_button.set_state.assert_called_once_with("error")
+        panel.refresh_button.set_state.assert_called_once_with("success")
 
 
 class GeometryTests(unittest.TestCase):
-    def test_two_cards_fit_side_by_side_without_clipping(self):
-        for width, height in ((1120, 532), (960, 482)):
+    def test_cards_stack_with_equal_margins_at_each_width(self):
+        for width in (540, 640, 880):
             with self.subTest(width=width):
-                rects, content = card_rectangles(width, height, 2)
-                left, right = rects
-                self.assertLess(left[2], right[0])
-                self.assertEqual(left[1], right[1])
-                self.assertLessEqual(right[2], width)
-                self.assertLessEqual(left[3], height)
-                self.assertEqual(content, height)
+                cards = card_rectangles(width, 5)
+                self.assertEqual(len(cards), 5)
+                for left, _, right, _ in cards:
+                    self.assertEqual(left, width - right)
+                self.assertEqual([right[1] - left[3] for left, right in zip(cards, cards[1:])], [CARD_GAP] * 4)
+                self.assertEqual(cards[-1][3] + CARD_PADDING, content_height(5))
 
-    def test_three_devices_fit_one_row_at_default_and_minimum_window_sizes(self):
-        for width, height in ((1280, 532), (1120, 482)):
-            with self.subTest(width=width, height=height):
-                rects, content = card_rectangles(width, height, 3)
-                self.assertEqual(len(rects), 3)
-                self.assertEqual(content, height)
-                for index, (left, top, right, bottom) in enumerate(rects):
-                    self.assertGreaterEqual(left, 0)
-                    self.assertGreaterEqual(top, 0)
-                    self.assertLessEqual(right, width)
-                    self.assertLessEqual(bottom, height)
-                    self.assertEqual(top, rects[0][1])
-                    if index:
-                        self.assertGreater(left, rects[index - 1][2])
-
-    def test_additional_devices_are_scrollable_and_not_discarded(self):
-        rects, content = card_rectangles(1120, 532, 5)
-        self.assertEqual(len(rects), 5)
-        self.assertGreater(content, 532)
-        self.assertLessEqual(rects[-1][3], content)
+    def test_overview_uses_less_space_when_devices_are_removed(self):
+        self.assertLess(content_height(0), content_height(1))
+        self.assertLess(content_height(1), content_height(2))
+        self.assertLess(content_height(2), content_height(5))
 
 
 class DisplayTransformTests(unittest.TestCase):

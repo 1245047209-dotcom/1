@@ -54,6 +54,9 @@ class UpdateManager:
 
     def open(self):
         self._window()
+        show_updates = getattr(self.window, "show_updates", None)
+        if show_updates is not None:
+            show_updates()
         if not self.busy:
             self.check(manual=True)
 
@@ -191,6 +194,10 @@ class UpdateManager:
                     self.primary.configure(text="重新检查", command=lambda: self.check(manual=True))
                     self.ignore.configure(state="disabled")
                 else:
+                    if not extra:
+                        show_updates = getattr(self.window, "show_updates", None)
+                        if show_updates is not None:
+                            show_updates()
                     client.save_state(notified_tag=value.tag)
                     self.status.set(f"发现新版本 {value.tag} · {value.size / 1048576:.1f} MB")
                     self._notes(value.notes)

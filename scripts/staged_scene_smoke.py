@@ -44,7 +44,6 @@ devices = [SavedDevice("test-mouse","HID\\VID_046D&PID_C539\\TEST","PRO WIRELESS
            SavedDevice("test-buds","BTHENUM\\DEV_020000000001","测试的Beats Studio Buds","Beats","02:00:00:00:00:01","耳机",transport="bluetooth")]
 store = Mock()
 store.load.return_value = devices, DEFAULT_DEVICE_ID
-store.view_mode.return_value = "all"
 store.default_visible.return_value = True
 with patch("aula_discovery.AulaDiscovery",return_value=Mock()), patch("my_devices.DeviceStore",return_value=store):
     panel = md.NexusPanel(root)
@@ -64,31 +63,45 @@ def snapshot(canvas):
     return result
 
 count = 0
-for mode in ("all","single"):
-    for key in panel.readings:
-        panel.view_mode,panel.selected_device_id = mode,key
-        panel.reading = panel.readings[key]
+for mode in ("light", "dark"):
+    panel.appearance.set_mode(mode)
+    for logical_width in (md.MIN_WIDTH, md.DEFAULT_WIDTH):
+        panel._layout_size = (panel.ui.px(logical_width), panel._layout_size[1])
         panel.draw()
-        expected = snapshot(panel.canvas),snapshot(panel.overview_canvas)
-        panel.transition.phase,panel.transition.alpha,panel.transition.offset = "prepare",0,24
+        body = panel.overview_canvas
+        photos = body.find_withtag("product_photo")
+        surfaces = body.find_withtag("product_surface")
+        assert len(photos) == 3 and len(surfaces) == (3 if mode == "dark" else 0)
+        badge = body.itemcget(body.find_withtag("status_badge")[0], "image")
+        panel.transition.alpha = .5
+        faded_badge = panel.transition.fade_image(badge)
+        assert faded_badge.transparency_get(0, 0)
+        assert faded_badge.width() == panel.ui.px(md.BADGE_WIDTH)
+        panel.transition.alpha = 1.
+        for surface, photo in zip(surfaces, photos):
+            assert surface < photo
+        for photo, card in zip(photos[1:], md.card_rectangles(logical_width, 3)[1:]):
+            left, top, right, bottom = body.bbox(photo)
+            x1, y1, x2, y2 = card
+            assert bottom - top >= 100
+            assert panel.ui.px((x1+x2)/2) < left < right < panel.ui.px(x2)
+            assert panel.ui.px(y1+12) < top < bottom < panel.ui.px(y2-43)
+
+        expected = snapshot(panel.canvas), snapshot(body)
+        panel.transition.phase, panel.transition.alpha, panel.transition.offset = "prepare", 0, 24
         for _ in panel.reveal_transition():
             pass
-        panel.transition.phase,panel.transition.alpha,panel.transition.offset = "idle",1,0
+        panel.transition.phase, panel.transition.alpha, panel.transition.offset = "idle", 1, 0
         panel.transition.paint()
-        actual = snapshot(panel.canvas),snapshot(panel.overview_canvas)
-        # The overview is unmapped and intentionally empty when entering details.
-        relevant = 2 if mode == "all" else 1
-        assert actual[:relevant] == expected[:relevant], (mode,key)
-        assert not panel.canvas.staging and not panel.overview_canvas.staging
+        assert (snapshot(panel.canvas), snapshot(body)) == expected, (mode, logical_width)
+        assert not panel.canvas.staging and not body.staging
         panel.finish_transition()
         count += 1
 errors = []
 root.report_callback_exception = lambda *error: errors.append(error)
-keys = list(panel.readings)
 def change(index):
-    panel.view_mode = "all" if index%3 == 0 else "single"
-    panel.selected_device_id = keys[index%len(keys)]
-    panel.reading = panel.readings[panel.selected_device_id]
+    panel.saved_devices = devices[:1] if index % 3 == 0 else devices
+    panel.card_hover.suspend()
     panel.transition.start()
 for index, delay in enumerate((0,25,100,115,145,180,205,230)):
     root.after(delay,lambda index=index: change(index))
@@ -97,7 +110,7 @@ def finish():
         assert not errors, errors
         assert not panel.transition.active
         assert not panel.canvas.staging and not panel.overview_canvas.staging
-        assert panel.selected_device_id in panel.visible_devices
+        assert set(panel.visible_devices) == {key for key, _ in panel.device_entries()}
         for layer in panel.transition.layers:
             assert all(layer["canvas"].type(item) for item,_style in layer["entries"])
         from frame_pacer import _resolution
@@ -108,4 +121,4 @@ root.after(1300,finish)
 root.mainloop()
 if errors:
     raise RuntimeError(errors)
-print(f"Staged commit, cancellation, unchanged outgoing scene, scaling, {count} exact layouts and 8 rapid interrupted switches passed.")
+print(f"Staged commit, cancellation, unchanged outgoing scene, scaling, {count} exact layouts and 8 rapid interrupted list updates passed.")

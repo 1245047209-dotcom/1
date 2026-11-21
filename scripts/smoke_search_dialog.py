@@ -50,6 +50,8 @@ def smoke():
 
     root = tk.Tk()
     root.withdraw()
+    root.geometry("459x258+100+100")
+    root.attributes("-alpha", 0.0)
     root._nexus_ui = UIScale(root, .85)
     errors = []
     root.report_callback_exception = lambda cls, exc, trace: errors.append(exc)
@@ -71,8 +73,12 @@ def smoke():
         stack.enter_context(patch("receiver_search.scan_receivers", side_effect=scan_usb))
         scan_bluetooth = stack.enter_context(patch("receiver_search.scan_bluetooth", return_value=[bluetooth]))
         stack.enter_context(patch("aula_protocols.identify_receivers", side_effect=lambda devices: devices))
+        root.deiconify()
+        root.update()
         search = ReceiverSearch(root, on_add=add, is_added=saved)
-        root.update_idletasks()
+        wait_until(lambda: search.window.winfo_ismapped(), "compact search did not open")
+        assert (search.window.winfo_width(), search.window.winfo_height()) == (459, 258)
+        assert search.table.winfo_ismapped() and search.details_button.winfo_ismapped()
         assert Path(sys.modules["receiver_search"].__file__).parent == candidate
         assert str(search.window.transient()) == str(root)
         assert search.mode_tabs.selected == "usb"
@@ -102,6 +108,46 @@ def smoke():
         assert usb_keyboard.model in search.table.item("0", "values")
         assert search.aula_combo.instate(("readonly", "!disabled"))
         assert search.aula_choice.get() == usb_keyboard.model
+        search.details_button.invoke()
+        wait_until(lambda: search.details_panel.winfo_ismapped(), "compact details did not open")
+        assert search.detail.winfo_height() > 20 and search.aula_combo.winfo_ismapped()
+        assert not search.table_frame.winfo_ismapped()
+        assert search.copy_button.winfo_ismapped() and search.add_button.winfo_ismapped()
+        root.geometry("544x500")
+        wait_until(lambda: search.stacked and search.window.winfo_height() == 500, "search did not grow with the owner")
+        assert search.window.winfo_width() == 544
+        assert search.table_frame.winfo_ismapped() and search.details_panel.winfo_ismapped()
+        assert not search.details_button.winfo_ismapped()
+        root.geometry("459x258")
+        wait_until(lambda: not search.stacked and search.window.winfo_height() == 258, "search did not shrink with the owner")
+        assert search.window.winfo_width() == 459 and search.details_panel.winfo_ismapped()
+        search.details_button.invoke()
+        wait_until(lambda: search.table_frame.winfo_ismapped(), "compact results did not return")
+        assert search.table.selection() == ("0",)
+
+        with patch("receiver_search.scan_receivers", side_effect=TimeoutError("USB 搜索超时")):
+            search.search_button.invoke()
+            wait_until(lambda: not search.busy, "failing USB rescan did not finish")
+        assert search.search_button.phase == "error"
+        assert not search.table.get_children()
+        assert "USB 搜索超时" in search.detail.get("1.0", "end")
+        for show_other in (True, False):
+            search.other_switch.invoke()
+            assert search.show_other.get() == show_other
+            assert "搜索失败" in search.status.get(), "changing the filter hid the scan failure"
+            assert "USB 搜索超时" in search.detail.get("1.0", "end")
+
+        with patch("receiver_search.scan_receivers", side_effect=OSError()):
+            search.search_button.invoke()
+            wait_until(lambda: not search.busy, "USB rescan with a blank error did not finish")
+        assert search.search_button.phase == "error"
+        assert "OSError" in search.detail.get("1.0", "end")
+
+        search.search_button.invoke()
+        wait_until(lambda: not search.busy and bool(search.table.get_children()), "USB retry did not recover")
+        assert search.search_button.phase == "idle"
+        assert search.table.get_children() == ("0",)
+
         search.other_switch.invoke()
         assert search.table.get_children() == ("0", "1")
         search.table.selection_set("1")
@@ -134,7 +180,7 @@ def smoke():
         root.update()
         assert not errors
 
-    print("Hidden Tk smoke passed: mode switch during scan, filtering, details, AULA options, copy, add and cleanup.")
+    print("Tk search smoke passed: matching size, compact and stacked panels, mode switch, retry, and device actions.")
 
 
 if __name__ == "__main__":

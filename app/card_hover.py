@@ -5,6 +5,7 @@ import tkinter as tk
 
 from ui_motion import ease_out_cubic
 from frame_pacer import FramePacer
+import theme
 
 
 class CardHover:
@@ -29,7 +30,8 @@ class CardHover:
         if key in self.shadow_cache:
             return self.shadow_cache[key]
         if not self.shadow_sources:
-            self.shadow_sources = [tk.PhotoImage(master=self.root, file=str(self.assets / f"card-hover-{i}.png"))
+            self.shadow_sources = [tk.PhotoImage(master=self.root, file=str(theme.asset(
+                                       self.root, self.assets / f"card-hover-{i}.png")))
                                    for i in range(1, 6)]
         frames = []
         for source in self.shadow_sources:
@@ -160,8 +162,11 @@ class CardHover:
         self.layers.clear()
         self.canvas.configure(cursor="")
 
-    def close(self):
+    def reset_assets(self):
         self.suspend()
-        self.closed = True
         self.shadow_cache.clear()
         self.shadow_sources.clear()
+
+    def close(self):
+        self.closed = True
+        self.reset_assets()

@@ -1,9 +1,16 @@
 """Layout and display transforms for the multi-device dashboard (stdlib only)."""
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import math
 
 from device_readers import KEYBOARD_TITLE, Reading, stamp_observation
 from saved_devices import DEFAULT_DEVICE_ID
+
+CARD_MARGIN = 16
+CARD_PADDING = 10
+CARD_GAP = 14
+CARD_HEIGHT = 198
+EMPTY_HEIGHT = 150
+OVERVIEW_TOP = 125
+FOOTER_HEIGHT = 40
 
 
 def read_device_batch(devices, read_default, read_saved, *, include_default=True):
@@ -27,18 +34,18 @@ def read_device_batch(devices, read_default, read_saved, *, include_default=True
     return result
 
 
-def card_rectangles(width, viewport_height, count):
-    # The overview's supported minimum width keeps three devices on one row.
-    columns = min(max(count, 1), 3 if width >= 1120 else 2 if width >= 900 else 1)
-    card_width = (width - 48 - 20 * (columns - 1)) / columns
-    card_height = max(450, viewport_height - 24)
+def content_height(count):
+    if not count:
+        return EMPTY_HEIGHT
+    return count * CARD_HEIGHT + (count - 1) * CARD_GAP + 2 * CARD_PADDING
+
+
+def card_rectangles(width, count):
     rectangles = []
     for index in range(count):
-        x = 24 + (index % columns) * (card_width + 20)
-        y = 12 + (index // columns) * (card_height + 20)
-        rectangles.append((x, y, x + card_width, y + card_height))
-    content_height = 24 + math.ceil(count / columns) * (card_height + 20) - 20
-    return rectangles, max(viewport_height, content_height)
+        y = CARD_PADDING + index * (CARD_HEIGHT + CARD_GAP)
+        rectangles.append((CARD_MARGIN, y, width - CARD_MARGIN, y + CARD_HEIGHT))
+    return rectangles
 
 
 def fit_ppm(data, max_width, max_height, clockwise=False):

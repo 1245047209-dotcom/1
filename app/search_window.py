@@ -36,29 +36,54 @@ def _windows_bounds(owner, window):
     return work, border_x, border_y
 
 
-def place_bottom_right(window, parent, width, height, *, margin=16):
-    """Place a withdrawn toplevel once in its owner's monitor work area."""
-    owner = parent.winfo_toplevel()
-    # Realize the frame while hidden, on the owner's monitor so the border
-    # measurements use the same DPI as the eventual placement.
-    window.geometry(f"{width}x{height}+{owner.winfo_x()}+{owner.winfo_y()}")
-    window.update_idletasks()
+def window_work_area(owner, window):
     work, border_x, border_y = None, 0, 0
     if sys.platform == "win32":
         work, border_x, border_y = _windows_bounds(owner, window)
     if work is None:
         work = 0, 0, owner.winfo_screenwidth(), owner.winfo_screenheight()
+    return work, border_x, border_y
 
-    left, top, right, bottom = work
-    width = min(width, max(1, right - left - border_x - margin * 2))
-    height = min(height, max(1, bottom - top - border_y - margin * 2))
-    min_width, min_height = window.minsize()
-    if min_width > width or min_height > height:
-        window.minsize(min(min_width, width), min(min_height, height))
-    x = max(left, right - width - border_x - margin)
-    y = max(top, bottom - height - border_y - margin)
-    # The '+' selects absolute coordinates even if the values are negative.
-    window.geometry(f"{width}x{height}+{x}+{y}")
+
+def match_owner_size(window, parent):
+    """Keep the dialog's client size in sync with the main window."""
+    owner = parent.winfo_toplevel()
+    window.resizable(False, False)
+    owner.update_idletasks()
+    last_size = None
+
+    def sync(event=None):
+        nonlocal last_size
+        if event is not None and event.widget is not owner:
+            return
+        if event is None:
+            width, height = owner.winfo_width(), owner.winfo_height()
+            if width <= 1:
+                width = owner.winfo_reqwidth()
+            if height <= 1:
+                height = owner.winfo_reqheight()
+            x, y = owner.winfo_x(), owner.winfo_y()
+            window.geometry(f"{width}x{height}+{x}+{y}")
+            window.update_idletasks()
+        else:
+            width, height = event.width, event.height
+            x, y = window.winfo_x(), window.winfo_y()
+        if min(width, height) <= 1 or last_size == (width, height):
+            return
+        (left, top, right, bottom), border_x, border_y = window_work_area(window, window)
+        x = max(left, min(x, right - width - border_x))
+        y = max(top, min(y, bottom - height - border_y))
+        window.geometry(f"{width}x{height}+{x}+{y}")
+        last_size = width, height
+
+    sync()
+    subscription = owner.bind("<Configure>", sync, add="+")
+
+    def detach(event):
+        if event.widget is window and owner.winfo_exists():
+            owner.unbind("<Configure>", subscription)
+
+    window.bind("<Destroy>", detach, add="+")
     window.deiconify()
 
 
