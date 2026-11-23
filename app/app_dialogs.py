@@ -427,7 +427,7 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
         self.combo = IntervalPicker(line, self, self.interval, [label for _, label in tc.INTERVAL_CHOICES],
                                     scale=self.scale, show_clock=False, flat=True)
         self.combo.place(relx=1, rely=.5, x=-self.p(6), anchor="e")
-        line = row(self, body, "自动刷新", icon="refresh", swatch=theme.SWITCH_ON)
+        line = row(self, body, "自动刷新", detail="仅主窗口", icon="refresh", swatch=theme.SWITCH_ON)
         Switch(line, self.auto, scale=self.scale).place(relx=1, rely=.5, anchor="e", x=-self.p(14))
         # 通知与系统
         body = self._group("通知与系统", footer="低电量提醒会在设备电量低于 10% 时发送 Windows 通知。")
@@ -602,11 +602,11 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
             if self.boot.get() != tc.is_autostart_enabled() and not tc.set_autostart(self.boot.get()):
                 raise OSError("开机启动设置未能保存，请重试")
             interval = next(sec for sec, label in tc.INTERVAL_CHOICES if label == self.interval.get())
-            cfg = tc.load_config()
-            cfg.update(interval=interval, autostart=self.boot.get(), low_battery_alert=self.alert.get(),
-                       gpu_animation=self.gpu.get(), theme=self.theme_mode, glass_backdrop=self.glass.get())
+            cfg = {"interval": interval, "panel_auto_refresh": self.auto.get(), "autostart": self.boot.get(),
+                   "low_battery_alert": self.alert.get(), "gpu_animation": self.gpu.get(),
+                   "theme": self.theme_mode, "glass_backdrop": self.glass.get()}
             tc.save_config(cfg, strict=True)
-            panel.auto, panel.interval = self.auto.get(), interval
+            panel.auto, panel.interval = cfg["panel_auto_refresh"], interval
             panel.glass_enabled = self.glass.get()
             panel.theme_choice.set(theme.MODE_LABELS[self.theme_mode])
             tc.post_to_tray(tc.MSG_RELOAD)

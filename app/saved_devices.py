@@ -7,11 +7,11 @@ import os
 from pathlib import Path
 import re
 import tempfile
-import threading
 import uuid
 
+from state_lock import state_file_lock
+
 DEFAULT_DEVICE_ID = "aula-f87-default"
-_LOCK = threading.RLock()
 
 
 class DeviceStoreError(ValueError):
@@ -109,12 +109,11 @@ class DeviceStore:
     def set_view_mode(self, mode):
         if mode not in ("all", "single"):
             raise DeviceStoreError("无效的视图")
-        with _LOCK:
+        with state_file_lock(self.path):
             devices, selected = self.load()
             self._save(devices, selected, mode)
 
     def _save(self, devices, selected, view=None, *, options=None):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent,
@@ -137,7 +136,7 @@ class DeviceStore:
         return existing or (DEFAULT_DEVICE_ID if legacy_default(receiver) and self.default_visible() else None)
 
     def add(self, receiver, *, select=True):
-        with _LOCK:
+        with state_file_lock(self.path):
             devices, selected = self.load()
             options = self._options()
             if not select and not self.can_auto_add(receiver):
@@ -169,14 +168,14 @@ class DeviceStore:
             return device.id, True
 
     def select(self, device_id):
-        with _LOCK:
+        with state_file_lock(self.path):
             devices, _ = self.load()
             if not ((device_id == DEFAULT_DEVICE_ID and self.default_visible()) or any(d.id == device_id for d in devices)):
                 raise DeviceStoreError("设备已被移除，请重新加入")
             self._save(devices, device_id)
 
     def remove(self, device_id):
-        with _LOCK:
+        with state_file_lock(self.path):
             devices, selected = self.load()
             options = self._options()
             if device_id == DEFAULT_DEVICE_ID:
@@ -196,7 +195,7 @@ class DeviceStore:
         model = model_name(model)
         if not model:
             return False
-        with _LOCK:
+        with state_file_lock(self.path):
             devices, selected = self.load()
             changed = False
             updated = []

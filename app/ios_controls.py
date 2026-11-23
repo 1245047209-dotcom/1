@@ -55,21 +55,23 @@ class IconButton(tk.Canvas):
             self.command()
 
     def redraw(self):
-        face = theme.color(self, theme.FILL)
+        dark = theme.is_dark(self)
+        face = theme.color(self, theme.TOOLBAR_FACE)
         if self.pressed and self.hover:
             face = theme.blend(face, theme.color(self, theme.TEXT), .14)
         elif self.hover:
             face = theme.blend(face, theme.color(self, theme.TEXT), .06)
-        if self.focused:
-            edge = theme.color(self, theme.FOCUS)
+        if self.focused or dark:
+            edge = theme.color(self, theme.FOCUS if self.focused else theme.EDGE)
             data = glass_capsule_png(self.size, self.size, face, edge, edge, reflection=0)
         else:
             data = capsule_png(self.size, self.size, face)
         self.plate = tk.PhotoImage(master=self, data=data, format="PNG")
         self.itemconfigure(self.plate_item, image=self.plate)
         text, family = theme.glyph(self, self.name)
-        self.itemconfigure(self.glyph_item, text=text, fill=theme.color(self, theme.ACCENT),
-                           font=(family, -max(8, round(self.size * .44))))
+        glyph_size = max(8, round(self.size * (.60 if dark else .44)))
+        self.itemconfigure(self.glyph_item, text=text, fill=theme.color(self, theme.TOOLBAR_ICON),
+                           font=(family, -glyph_size))
 
 
 def opaque_photo(widget, photo, background):

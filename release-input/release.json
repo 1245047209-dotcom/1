@@ -1,10 +1,10 @@
 {
-  "tag": "v73.1",
-  "installer": "Nexus-v73.1-Windows-x64-Setup.exe",
-  "source": "Nexus-v73.1-source.zip",
+  "tag": "v73.2",
+  "installer": "Nexus-v73.2-Windows-x64-Setup.exe",
+  "source": "Nexus-v73.2-source.zip",
   "base_installer": {
-    "url": "https://github.com/1245047209-dotcom/1/releases/download/v73/Nexus-v73-Windows-x64-Setup.exe",
-    "sha256": "080bf15290851a27d430a0267adab14eff30a4a4bcd0690d481cf59db18ecb55"
+    "url": "https://github.com/1245047209-dotcom/1/releases/download/v73.1/Nexus-v73.1-Windows-x64-Setup.exe",
+    "sha256": "494b881f70e98bd0a1fd9f3cff9681fba374d589c7d678ec4d13177656fd965d"
   },
   "compiler": {
     "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_4_3/innosetup-6.4.3.exe",

@@ -10,22 +10,26 @@ import re
 import struct
 import subprocess
 import tempfile
-import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, unquote
 from urllib.request import Request, HTTPSHandler, HTTPRedirectHandler, build_opener
 import uuid
 
+from state_lock import state_file_lock
+
 BASE = Path(__file__).resolve().parent
 DEFAULT_REPOSITORY = "1245047209-dotcom/1"
 CHECK_INTERVAL = 6 * 3600
 MAX_INSTALLER_SIZE = 512 * 1024 * 1024
-_state_lock = threading.RLock()
 
 
 class UpdateError(Exception):
     pass
+
+
+class InstallerFileError(UpdateError):
+    """The downloaded package must be fetched again before installation."""
 
 
 def version_tuple(value):
@@ -184,30 +188,39 @@ def load_state(base=BASE):
     return state
 
 
+def _write_state(path, state):
+    temporary = path.with_name("update-state-" + uuid.uuid4().hex + ".tmp")
+    try:
+        temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def save_state(base=BASE, **changes):
-    base = Path(base)
-    with _state_lock:
+    path = Path(base) / "update_state.json"
+    with state_file_lock(path):
         state = load_state(base)
         state.update({key: val for key, val in changes.items() if key in state})
-        temporary = base / ("update-state-" + uuid.uuid4().hex + ".tmp")
-        try:
-            temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(temporary, base / "update_state.json")
-        finally:
-            temporary.unlink(missing_ok=True)
+        _write_state(path, state)
     return state
 
 
 def check_for_updates(*, force=False, base=BASE):
-    state = load_state(base)
-    now = time.time()
-    last = state.get("last_check", 0)
-    if not force and (not state.get("auto_check") or isinstance(last, (int, float)) and 0 <= now - last < CHECK_INTERVAL):
-        return None
-    save_state(base, last_check=now)
+    path = Path(base) / "update_state.json"
+    with state_file_lock(path):
+        state = load_state(base)
+        now = time.time()
+        last = state.get("last_check", 0)
+        if not force and (not state.get("auto_check") or isinstance(last, (int, float)) and 0 <= now - last < CHECK_INTERVAL):
+            return None
+        state["last_check"] = now
+        _write_state(path, state)
     release = fetch_latest(DEFAULT_REPOSITORY)
-    if not force and release is not None and (release.tag == state.get("ignored_tag") or release.tag == state.get("notified_tag")):
-        return None
+    if not force and release is not None:
+        state = load_state(base)
+        if not state.get("auto_check") or release.tag in (state.get("ignored_tag"), state.get("notified_tag")):
+            return None
     return release
 
 
@@ -286,12 +299,19 @@ def download_installer(release, *, progress=None, cancel=None, directory=None):
 
 def launch_installer(path, release, checksum, *, install_dir=BASE):
     """Called only after the user's explicit install click; verify again."""
-    verify_installer(path, release, checksum)
+    try:
+        verify_installer(path, release, checksum)
+    except OSError as exc:
+        raise InstallerFileError("已下载的安装包无法读取，请重新下载") from exc
+    except UpdateError as exc:
+        raise InstallerFileError(str(exc)) from exc
     install_dir = Path(install_dir).resolve()
     if not (install_dir / "runtime" / "pythonw.exe").is_file():
         raise UpdateError("源码运行模式请手动安装；自动覆盖更新仅用于安装版")
     args = [str(Path(path).resolve()), "/SP-", "/NORESTART", "/DIR=" + str(install_dir)]
     try:
         return subprocess.Popen(args, cwd=str(Path(path).parent), creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except FileNotFoundError as exc:
+        raise InstallerFileError("已下载的安装包已找不到，请重新下载") from exc
     except OSError as exc:
         raise UpdateError("无法启动安装程序，请重新尝试") from exc

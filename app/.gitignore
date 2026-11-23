@@ -3,8 +3,12 @@ __pycache__/
 runtime/
 *.log
 /added_devices.json
+/added_devices.lock
 /tray_config.json
+/tray_config.lock
 /update_state.json
+/update_state.lock
+/open-update.request
 /tray_pid.txt
 /battery_*.json
 /low_battery_alert.json

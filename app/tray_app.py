@@ -298,7 +298,7 @@ class TrayApp:
         if bool(self.cfg.get("autostart")) != actual:
             # 只把真实状态写回配置，让界面上的勾选和任务管理器保持一致
             self.cfg["autostart"] = actual
-            tc.save_config(self.cfg)
+            tc.save_config({"autostart": actual})
             self.log(f"开机自启实际为 {actual}，已同步到配置（未改动系统设置）")
 
     def refresh_now(self) -> None:
@@ -310,8 +310,9 @@ class TrayApp:
     def _worker(self, hwnd: int) -> None:
         try:
             from aula_f87_v2d import tray_readings
-            readings = tray_readings()
-            self.levels = {key: reading for (_, key, _, _), reading in zip(TRAY_ICONS, readings)}
+            readings = iter(tray_readings())
+            unavailable = devices.Reading("键盘电量", "", error="无可用键盘")
+            self.levels = {key: next(readings, unavailable) for _, key, _, _ in TRAY_ICONS}
         except Exception:
             self.log("读取异常:\n" + traceback.format_exc())
             self.levels = {key: devices.Reading(title, "", error="读取异常，请重试")

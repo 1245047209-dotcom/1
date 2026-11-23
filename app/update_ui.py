@@ -3,31 +3,19 @@ from __future__ import annotations
 
 import queue
 import threading
-import time
-import tkinter as tk
 
 import update_client as client
 
 
-def request_existing_window(timeout=.8):
+def request_existing_window():
     """Ask this installation's running UI to open its embedded update card."""
     import tray_common as tc
-    hwnd = tc.ui_hwnd()
-    if not hwnd:
-        return False
     request = client.BASE / "open-update.request"
     try:
         request.touch()
-        tc.USER32.ShowWindow(hwnd, 9)
-        tc.USER32.SetForegroundWindow(hwnd)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if not request.exists():
-                return True
-            time.sleep(.05)
     except OSError:
         pass
-    return False
+    return tc.focus_ui(wait_timeout=2.0)
 
 
 class UpdateManager:
@@ -133,6 +121,12 @@ class UpdateManager:
         try:
             path, checksum = self.downloaded
             client.launch_installer(path, self.release, checksum)
+        except client.InstallerFileError as exc:
+            self.downloaded = None
+            self.status.set(str(exc))
+            self.progress["value"] = 0
+            self.primary.configure(text="重新下载", state="normal", command=self._download)
+            return
         except client.UpdateError as exc:
             self.status.set(str(exc))
             return
@@ -180,11 +174,11 @@ class UpdateManager:
                 continue
             self.busy = False
             if kind == "checked":
+                if value is None and not extra:
+                    continue
                 if extra and self.window is None:
                     continue
                 self.release, self.downloaded = value, None
-                if value is None and not extra:
-                    continue
                 self._window()
                 self.progress["value"] = 0
                 self.primary.configure(state="normal")

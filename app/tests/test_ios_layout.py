@@ -78,6 +78,18 @@ class ArtworkTests(unittest.TestCase):
         self.assertEqual(png_size(rounded_surface_png(300, 120, 17, "#ffffff")), (300, 120))
         self.assertEqual(png_size(rounded_surface_png(10, 10, 40, "#ffffff")), (10, 10))
 
+    def test_thumbnail_tint_preserves_transparent_corners_and_center_opacity(self):
+        import zlib
+        data = rounded_surface_png(38, 38, 9, "#e4edff", opacity=.07)
+        raw = zlib.decompress(data[data.index(b"IDAT") + 4:data.index(b"IEND") - 8])
+        center = 1 + 19 * (38 * 4 + 1) + 19 * 4
+        self.assertEqual(tuple(raw[center:center + 4]), (228, 237, 255, 18))
+        self.assertEqual(raw[4], 0)
+
+        flat = rounded_surface_png(4, 4, 0, "#e4edff", "#1c1c1e", opacity=.07)
+        pixels = zlib.decompress(flat[flat.index(b"IDAT") + 4:flat.index(b"IEND") - 8])
+        self.assertEqual(tuple(pixels[1:5]), (42, 43, 46, 255))
+
 
 class ScrollThumbTests(unittest.TestCase):
     def test_no_thumb_when_everything_fits(self):
@@ -403,6 +415,33 @@ class GlassTests(unittest.TestCase):
         self.assertLessEqual(luminance(dark), .14 + 1e-3)
         calm = tint((240, 240, 240), (242, 242, 247), .58, .80, False)
         self.assertGreater(luminance(calm), .9)
+
+    def test_tint_preserves_tonal_variation_inside_contrast_limits(self):
+        from glass import luminance, tint
+        dark_mid = luminance(tint((85,) * 3, (0,) * 3, .57, .15, True))
+        dark_bright = luminance(tint((240,) * 3, (0,) * 3, .57, .15, True))
+        self.assertLess(dark_mid, dark_bright)
+        self.assertLessEqual(dark_bright, .15)
+        light_dark = luminance(tint((0,) * 3, (255,) * 3, .69, .91, False))
+        light_mid = luminance(tint((160,) * 3, (255,) * 3, .69, .91, False))
+        self.assertLess(light_dark, light_mid)
+        self.assertGreaterEqual(light_dark, .91)
+
+    def test_card_finish_adds_stable_grain_and_soft_lighting(self):
+        import zlib
+        from glass import CARD_FINISH, bgra_to_png
+        width, height = 32, 48
+        flat = bytes((50, 50, 50, 255)) * width * height
+        data = bgra_to_png(width, height, flat, width * 4, radius=7, finish=CARD_FINISH[True])
+        self.assertEqual(data, bgra_to_png(width, height, flat, width * 4, radius=7, finish=CARD_FINISH[True]))
+        raw = zlib.decompress(data[data.index(b"IDAT") + 4:data.index(b"IEND") - 8])
+        row = width * 4 + 1
+        upper, center, lower = [raw[y * row + 1 + 8 * 4:y * row + 1 + 24 * 4:4] for y in (2, 25, 46)]
+        self.assertGreater(min(upper), max(center))
+        self.assertLess(max(lower), min(center))
+        self.assertGreater(len(set(center)), 1)
+        self.assertEqual(raw[4], 0)                   # transparent corner
+        self.assertEqual(raw[25 * row + 4 + 16 * 4], 255)
 
     def test_card_rim_is_a_thin_top_lit_highlight(self):
         import zlib

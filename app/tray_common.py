@@ -8,16 +8,20 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import json
 import os
 import sys
 import tempfile
+import time
+from contextlib import contextmanager
 from ctypes import wintypes
 from pathlib import Path
 from typing import Optional
 
 import win_link
 import win_shell
+from state_lock import state_file_lock
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "tray_config.json")
@@ -27,11 +31,16 @@ APP_NAME = "DeviceBatteryTray"
 WND_CLASS = "DeviceBatteryTrayWnd"
 MUTEX_NAME = "Global\\DeviceBatteryTray_single_instance"
 
-# 界面标题（托盘用它来找到已打开的窗口）
+# 界面标题和安装目录标识（托盘只打开同一安装的主窗口）
 UI_TITLE = "Nexus 外设电量中心"
+UI_INSTANCE_KEY = "NexusBatteryCenter.UI." + hashlib.sha256(
+    os.path.normcase(os.path.realpath(BASE_DIR)).encode("utf-8")
+).hexdigest()
+ERROR_ALREADY_EXISTS = 183
 
 DEFAULT_CONFIG = {
     "interval": 60,        # 托盘轮询间隔（秒）
+    "panel_auto_refresh": True,
     "autostart": True,     # 开机自启
     "low_battery_alert": True,
     "gpu_animation": True,
@@ -50,6 +59,16 @@ KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 USER32.FindWindowW.restype = ctypes.c_void_p
 USER32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+USER32.FindWindowExW.restype = wintypes.HWND
+USER32.FindWindowExW.argtypes = [wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR]
+USER32.GetAncestor.restype = wintypes.HWND
+USER32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+USER32.GetPropW.restype = wintypes.HANDLE
+USER32.GetPropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
+USER32.SetPropW.restype = wintypes.BOOL
+USER32.SetPropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.HANDLE]
+USER32.RemovePropW.restype = wintypes.HANDLE
+USER32.RemovePropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
 USER32.PostMessageW.restype = wintypes.BOOL
 USER32.PostMessageW.argtypes = [ctypes.c_void_p, wintypes.UINT,
                                 ctypes.c_size_t, ctypes.c_ssize_t]
@@ -57,8 +76,12 @@ USER32.RegisterWindowMessageW.restype = wintypes.UINT
 USER32.RegisterWindowMessageW.argtypes = [wintypes.LPCWSTR]
 USER32.ShowWindow.restype = wintypes.BOOL
 USER32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+USER32.ShowWindowAsync.restype = wintypes.BOOL
+USER32.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
 USER32.SetForegroundWindow.restype = wintypes.BOOL
 USER32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+KERNEL32.CreateMutexW.restype = wintypes.HANDLE
+KERNEL32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
 
 
 # --------------------------------------------------------------------------
@@ -79,15 +102,18 @@ def load_config() -> dict:
 
 
 def save_config(cfg: dict, *, strict=False) -> None:
-    clean = {k: cfg.get(k, DEFAULT_CONFIG[k]) for k in DEFAULT_CONFIG}
+    """Merge changed fields with the latest settings shared by the panel and tray."""
     path = Path(CONFIG_PATH)
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
-                                         prefix=path.stem + ".", suffix=".tmp", delete=False) as stream:
-            temporary = Path(stream.name)
-            json.dump(clean, stream, ensure_ascii=False, indent=2)
-        os.replace(temporary, path)
+        with state_file_lock(path):
+            clean = load_config()
+            clean.update({key: cfg[key] for key in DEFAULT_CONFIG if key in cfg})
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                             prefix=path.stem + ".", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(clean, stream, ensure_ascii=False, indent=2)
+            os.replace(temporary, path)
     except OSError:
         if strict:
             raise
@@ -313,9 +339,54 @@ def post_to_tray(msg_name: str) -> bool:
     return bool(USER32.PostMessageW(hwnd, msg, 0, 0))
 
 
+@contextmanager
+def ui_instance():
+    """Keep the main panel unique to this installation in the desktop session."""
+    ctypes.set_last_error(0)
+    handle = KERNEL32.CreateMutexW(None, False, "Local\\" + UI_INSTANCE_KEY)
+    error = ctypes.get_last_error()
+    if not handle:
+        raise ctypes.WinError(error)
+    if error == ERROR_ALREADY_EXISTS:
+        KERNEL32.CloseHandle(handle)
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        KERNEL32.CloseHandle(handle)
+
+
+def register_ui_window(window) -> None:
+    hwnd = USER32.GetAncestor(window.winfo_id(), 2)  # GA_ROOT: the Tk top-level wrapper
+    if not hwnd or not USER32.SetPropW(hwnd, UI_INSTANCE_KEY, 1):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    def unregister(event):
+        if event.widget is window:
+            USER32.RemovePropW(hwnd, UI_INSTANCE_KEY)
+
+    window.bind("<Destroy>", unregister, add="+")
+
+
 def ui_hwnd() -> int:
-    h = USER32.FindWindowW(None, UI_TITLE)
-    return int(h) if h else 0
+    hwnd = USER32.FindWindowExW(None, None, None, UI_TITLE)
+    while hwnd:
+        if USER32.GetPropW(hwnd, UI_INSTANCE_KEY):
+            return int(hwnd)
+        hwnd = USER32.FindWindowExW(None, hwnd, None, UI_TITLE)
+    return 0
+
+
+def focus_ui(wait_timeout: float = 0.0) -> bool:
+    deadline = time.monotonic() + wait_timeout
+    while not (hwnd := ui_hwnd()):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(.05)
+    USER32.ShowWindowAsync(hwnd, 9)  # SW_RESTORE
+    USER32.SetForegroundWindow(hwnd)
+    return True
 
 
 def start_tray_app(wait_timeout: float = 6.0) -> bool:

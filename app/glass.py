@@ -1,9 +1,8 @@
-"""Frosted-glass backdrop for the main window (Windows 11 Mica style).
+"""Frosted-glass backdrop for the main window, sampled from desktop wallpaper.
 
-Tk cannot see through its own window, so this does what Mica does: the part of
-the desktop wallpaper behind the window is blurred, tinted towards the theme and
-drawn as the window background. Cards on top are a second, lighter (dark mode:
-deeper) layer of the same backdrop with rounded corners, so they read as glass.
+The part of the wallpaper behind the window is blurred and tinted towards the
+theme. Cards use a softer sample of the same wallpaper with fine grain, rounded
+corners and light on their upper edges.
 
 The wallpaper is sampled once per change at 1/16 of the monitor resolution and
 blurred there; every crop is upscaled by GDI+ with bicubic filtering, which is
@@ -11,9 +10,11 @@ what makes it look frosted. Other windows behind Nexus are not reflected.
 """
 from __future__ import annotations
 
+from functools import lru_cache
 import math
 import os
 from pathlib import Path
+from random import Random
 import sys
 
 from ios_art import _corner, png
@@ -26,12 +27,18 @@ MARGIN = 3           # extra samples around a crop so bicubic filtering never se
 RIM_WIDTH = 1.25     # glass highlight rim, physical px
 # Rim strength (top, bottom): white mixed into the card edge, strongest at the top like
 # light falling on iOS glass.
-RIM = {False: (.85, .30), True: (.24, .06)}
+RIM = {False: (.65, .18), True: (.27, .07)}
+
+# Top light, bottom shade and grain strength in 8-bit RGB levels.
+CARD_FINISH = {False: (7, 3, 2), True: (10, 5, 2)}
+_GRAIN_WIDTH = 4
+_GRAIN_HEIGHT = 64
+_GRAIN = Random(237).choices((-1, 0, 0, 1), k=_GRAIN_WIDTH * _GRAIN_HEIGHT)
 
 # (tint colour role, tint amount, minimum / maximum luminance) for each layer.
 LAYERS = {
-    "base": {False: (theme.BACKGROUND, .58, .80), True: (theme.BACKGROUND, .62, .14)},
-    "card": {False: (theme.SURFACE, .74, .91), True: (theme.SURFACE, .66, .22)},
+    "base": {False: (theme.BACKGROUND, .58, .80), True: (theme.BACKGROUND, .57, .15)},
+    "card": {False: (theme.SURFACE, .69, .91), True: (theme.SURFACE, .61, .22)},
 }
 
 
@@ -89,13 +96,17 @@ def luminance(rgb):
 
 
 def tint(rgb, tint_rgb, amount, bound, dark):
-    """Blend towards the tint, then further until the luminance bound is met (text contrast)."""
+    """Tint the sample while preserving tonal differences near the contrast limit."""
     mixed = tuple(c + (t - c) * amount for c, t in zip(rgb, tint_rgb))
-    current, target = luminance(mixed), luminance(tint_rgb)
-    if (not dark and current < bound) or (dark and current > bound):
-        # Fraction of the remaining way to the tint that reaches the bound.
-        extra = 1. if abs(target - current) < 1e-6 else min(1., abs(bound - current) / abs(target - current))
-        mixed = tuple(c + (t - c) * extra for c, t in zip(mixed, tint_rgb))
+    luma = luminance(mixed)
+    exposure, limit = (luma, bound) if dark else (1.0 - luma, 1.0 - bound)
+    knee = limit * .65
+    if exposure > knee:
+        excess, headroom = exposure - knee, limit - knee
+        compressed = knee + headroom * excess / (excess + headroom)
+        extra = (exposure - compressed) / exposure
+        neutral = 0 if dark else 255
+        mixed = tuple(c + (neutral - c) * extra for c in mixed)
     return tuple(max(0, min(255, round(c))) for c in mixed)
 
 
@@ -111,7 +122,43 @@ def rim_coverage(px, py, width, height, radius, rim=RIM_WIDTH):
     return max(0., min(1., rounded_distance(px, py, width, height, radius) + rim + .5))
 
 
-def bgra_to_png(width, height, bgra, stride, radius=0, rim=None):
+@lru_cache(maxsize=16)
+def _rim_rows(width, height, radius):
+    """Reuse the rounded edge geometry when a pane moves without resizing."""
+    band = radius + 2
+    sides = (*range(min(band, width)), *range(max(band, width - band), width))
+    rows = []
+    for y in range(height):
+        columns = range(width) if y < band or y >= height - band else sides
+        rows.append(tuple((x, coverage) for x in columns
+                          if (coverage := rim_coverage(x + .5, y + .5, width, height, radius)) > 0))
+    return tuple(rows)
+
+
+@lru_cache(maxsize=32)
+def _shift_rgb(amount):
+    return bytes(max(0, min(255, value + amount)) for value in range(256))
+
+
+def _finish_row(rgba, y, height, finish):
+    light, shade, grain = finish
+    position = y / max(1, height - 1)
+    top = max(0.0, 1.0 - position / .52)
+    bottom = max(0.0, (position - .55) / .45)
+    shift = round(light * top * top - shade * bottom * bottom)
+    if shift:
+        rgba[:] = rgba.translate(_shift_rgb(shift))
+    start = (y % _GRAIN_HEIGHT) * _GRAIN_WIDTH
+    for phase, sample in enumerate(_GRAIN[start:start + _GRAIN_WIDTH]):
+        if sample:
+            table = _shift_rgb(sample * grain)
+            # Adjust a complete lane of pixels in each colour channel at once.
+            for channel in range(3):
+                lane = slice(phase * 4 + channel, None, _GRAIN_WIDTH * 4)
+                rgba[lane] = rgba[lane].translate(table)
+
+
+def bgra_to_png(width, height, bgra, stride, radius=0, rim=None, *, finish=None):
     """RGBA PNG from top-down BGRA rows; ``radius`` > 0 rounds the four corners.
 
     ``rim=(top, bottom)`` lightens a thin inner stroke towards white, fading from
@@ -120,24 +167,23 @@ def bgra_to_png(width, height, bgra, stride, radius=0, rim=None):
     radius = max(0, min(int(radius), width // 2, height // 2))
     corner = _corner(radius) if radius else ()
     opaque = b"\xff" * width
-    band = radius + 2
+    rim_rows = _rim_rows(width, height, radius) if rim is not None else None
     scanlines = bytearray()
     for y in range(height):
         row = bgra[y * stride:y * stride + width * 4]
         rgba = bytearray(row)
         rgba[0::4], rgba[2::4] = row[2::4], row[0::4]
+        if finish is not None:
+            _finish_row(rgba, y, height, finish)
         alpha = bytearray(opaque)
         edge = y if y < radius else height - 1 - y if y >= height - radius else None
         if edge is not None:
             alpha[:radius] = corner[edge]
             alpha[width - radius:] = corner[edge][::-1]
-        if rim is not None:
+        if rim_rows is not None:
             strength = rim[0] + (rim[1] - rim[0]) * (y / max(1, height - 1))
-            # Only pixels near an edge can touch the stroke.
-            columns = range(width) if y < band or y >= height - band else (
-                *range(min(band, width)), *range(max(band, width - band), width))
-            for x in columns:
-                amount = strength * rim_coverage(x + .5, y + .5, width, height, radius)
+            for x, coverage in rim_rows[y]:
+                amount = strength * coverage
                 if amount > 0:
                     i = x * 4
                     for channel in range(i, i + 3):
@@ -215,9 +261,10 @@ class Backdrop:
     def __init__(self, root, native):
         self.root, self.native = root, native
         self.signature = None
-        self.samples = None          # (monitor rect, width, height, blurred pixels)
+        self.samples = None          # (monitor origin, width, height, samples by layer)
         self.error = ""
         self.cache = {}
+        self.sample_colors = {}
         self.average = None          # mean colour of the last base crop
 
     def _signature(self, monitor):
@@ -238,7 +285,9 @@ class Backdrop:
             return False
         if signature == self.signature and self.samples is not None:
             return True
-        self.signature, self.cache = signature, {}
+        self.signature = signature
+        self.cache.clear()
+        self.sample_colors.clear()
         path, _stamp, style, tile, solid, (left, top, right, bottom) = signature
         mw, mh = max(1, right - left), max(1, bottom - top)
         sw, sh = max(1, math.ceil(mw / SAMPLE)), max(1, math.ceil(mh / SAMPLE))
@@ -261,7 +310,8 @@ class Backdrop:
                 return False
         pixels = [(bgra[y * stride + x * 4 + 2], bgra[y * stride + x * 4 + 1], bgra[y * stride + x * 4])
                   for y in range(sh) for x in range(sw)]
-        self.samples = (left, top), sw, sh, box_blur(sw, sh, pixels)
+        base = box_blur(sw, sh, pixels)
+        self.samples = (left, top), sw, sh, {"base": base, "card": box_blur(sw, sh, base, radius=1, passes=2)}
         self.error = ""
         return True
 
@@ -272,21 +322,28 @@ class Backdrop:
         key = (round(screen_x), round(screen_y), width, height, role, dark, radius, self.signature)
         if key in self.cache:
             return self.cache[key]
-        (left, top), sw, sh, pixels = self.samples
+        (left, top), sw, sh, layers = self.samples
+        pixels = layers[role]
         fx, fy = (screen_x - left) / SAMPLE, (screen_y - top) / SAMPLE
         fw, fh = width / SAMPLE, height / SAMPLE
         x0, y0 = math.floor(fx) - MARGIN, math.floor(fy) - MARGIN
         x1, y1 = math.ceil(fx + fw) + MARGIN, math.ceil(fy + fh) + MARGIN
         role_tint, amount, bound = LAYERS[role][dark]
         tint_rgb = tuple(bytes.fromhex((role_tint.dark if dark else role_tint.light)[1:]))
+        colors = self.sample_colors.get((role, dark))
+        if colors is None:
+            colors = self.sample_colors[(role, dark)] = [None] * len(pixels)
         cw, ch = x1 - x0, y1 - y0
         rows = bytearray()
         for y in range(y0, y1):
             rows.append(0)
             line = min(sh - 1, max(0, y)) * sw
             for x in range(x0, x1):
-                rows.extend(tint(pixels[line + min(sw - 1, max(0, x))], tint_rgb, amount, bound, dark))
-                rows.append(255)
+                index = line + min(sw - 1, max(0, x))
+                color = colors[index]
+                if color is None:
+                    color = colors[index] = bytes((*tint(pixels[index], tint_rgb, amount, bound, dark), 255))
+                rows.extend(color)
         if role == "base":
             count = cw * ch
             self.average = "#" + bytes(round(sum(rows[1 + y * (cw * 4 + 1) + x * 4 + c]
@@ -296,7 +353,9 @@ class Backdrop:
         source = (fx - x0, fy - y0, fw, fh)
         bgra, stride = self.native.compose(crop, width, height,
                                            place=lambda _w, _h: (source, (0, 0, width, height)))
-        data = bgra_to_png(width, height, bgra, stride, radius, rim=RIM[dark] if role == "card" else None)
+        rim = RIM[dark] if role == "card" else None
+        finish = CARD_FINISH[dark] if role == "card" else None
+        data = bgra_to_png(width, height, bgra, stride, radius, rim, finish=finish)
         self.cache[key] = data
         while len(self.cache) > 16:
             self.cache.pop(next(iter(self.cache)))

@@ -122,7 +122,8 @@ def main():
         config = {"gpu_animation": False, "interval": 60, "theme": args.theme, "low_battery_alert": True,
                   "glass_backdrop": not args.no_glass}
         stack.enter_context(patch.object(ui.tc, "load_config", return_value=config))
-        for name, value in (("save_config", None), ("set_autostart", True), ("is_autostart_enabled", True),
+        stack.enter_context(patch.object(ui.tc, "save_config", side_effect=lambda changes, **_kw: config.update(changes)))
+        for name, value in (("set_autostart", True), ("is_autostart_enabled", True),
                             ("post_to_tray", False), ("install_desktop_links", {})):
             stack.enter_context(patch.object(ui.tc, name, return_value=value))
         stack.enter_context(patch("receiver_search.scan_devices", side_effect=demo_scan))
@@ -364,11 +365,14 @@ def main():
             assert dialog.header_title.cget("text") == "软件更新"
             dialog.select_page("settings")
             dialog.interval.set("5 分钟")
+            dialog.auto.set(False)
             dialog.pick_theme("dark")
             dialog.glass_switch.invoke()  # off
             dialog.done()
             assert config["glass_backdrop"] is False and not panel.glass_on() and not panel.glass_items
+            assert config["panel_auto_refresh"] is False and panel.auto is False
             panel.open_settings()
+            assert panel.settings_window.auto.get() is False
             panel.settings_window.glass_switch.invoke()  # back on
             panel.settings_window.done()
             assert config["glass_backdrop"] is True

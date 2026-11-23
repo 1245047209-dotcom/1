@@ -377,7 +377,7 @@ class NexusPanel:
         self.runtime_after_id = None
         self.refresh_button = RefreshButton(self.canvas, command=self.refresh, ui=self.ui)
         theme.style(self.refresh_button, bg=theme.SURFACE)
-        self.auto = True
+        self.auto = bool(cfg.get("panel_auto_refresh", True))
         self.interval = int(cfg.get("interval", 60))
         self.after_id = None
         self.settings_window = None
@@ -557,9 +557,7 @@ class NexusPanel:
         if mode == self.appearance.mode:
             return
         try:
-            config = tc.load_config()
-            config["theme"] = mode
-            tc.save_config(config, strict=True)
+            tc.save_config({"theme": mode}, strict=True)
         except OSError as exc:
             from tkinter import messagebox
 
@@ -1234,7 +1232,7 @@ class NexusPanel:
                 self.ui.images.pop(str(old_logical), None)
         return cache[key]
 
-    def surface(self, canvas, rect, radius, swatch=theme.SURFACE):
+    def surface(self, canvas, rect, radius, swatch=theme.SURFACE, *, opacity=1.0):
         if swatch is theme.SURFACE and canvas is self.overview_canvas and self.glass_on():
             self._glass_pending.append((rect, radius))   # placed by place_glass_cards()
             return None
@@ -1242,8 +1240,8 @@ class NexusPanel:
         width, height = self.ui.px(x2) - self.ui.px(x1), self.ui.px(y2) - self.ui.px(y1)
         corner, fill = self.ui.px(radius), self.color(swatch)
         logical, _physical = self.physical_image(
-            ("surface", width, height, corner, fill), x2 - x1, y2 - y1,
-            lambda: rounded_surface_png(width, height, corner, fill))
+            ("surface", width, height, corner, fill, opacity), x2 - x1, y2 - y1,
+            lambda: rounded_surface_png(width, height, corner, fill, opacity=opacity))
         return canvas.create_image(x1, y1, image=logical, anchor="nw", tags=("shape", "surface"))
 
     def place_glass_cards(self, canvas, width, viewport_height):
@@ -1331,6 +1329,7 @@ class NexusPanel:
                            fill=muted, font=(theme.FONT, 10))
         self.surface(canvas, layout["group"], 12)
         chevron, chevron_family = theme.glyph(canvas, "chevron")
+        thumbnail_opacity = .07 if theme.is_dark(self.root) else 1.0
         for index, ((key, device), (x1, y1, x2, y2)) in enumerate(zip(entries, layout["rows"])):
             self.visible_devices[key] = device
             reading = self.readings.get(key, Reading(device.label if device else KEYBOARD_TITLE, "正在读取…"))
@@ -1338,7 +1337,8 @@ class NexusPanel:
             middle = (y1 + y2) / 2
             if index:
                 canvas.create_line(x1 + 70, y1, x2, y1, fill=self.color(theme.LINE), width=1)
-            self.surface(canvas, (x1 + 14, middle - 22, x1 + 58, middle + 22), 10, theme.SOFT)
+            self.surface(canvas, (x1 + 14, middle - 22, x1 + 58, middle + 22), 10,
+                         theme.THUMBNAIL_BACKDROP, opacity=thumbnail_opacity)
             self.draw_thumbnail(canvas, device, x1 + 36, middle)
             title_font = (theme.FONT, 13)
             model = device.model if device else "AULA F87 Pro"
@@ -1609,23 +1609,27 @@ def main(argv=None) -> None:
         cli_once()
         return
 
-    if args.check_updates:
-        from update_ui import request_existing_window
-        if request_existing_window():
+    with tc.ui_instance() as primary:
+        if not primary:
+            if args.check_updates:
+                from update_ui import request_existing_window
+                request_existing_window()
+            else:
+                tc.focus_ui(wait_timeout=2.0)
             return
-
-    import tkinter as tk
-    root = tk.Tk()
-    root.withdraw()
-    panel = NexusPanel(root)
-    from update_ui import UpdateManager
-    panel.updates = UpdateManager(root, on_install=panel.close)
-    panel.updates.start()
-    panel.place_initial_window()
-    root.deiconify()
-    if args.check_updates:
-        root.after(50, panel.updates.open)
-    root.mainloop()
+        import tkinter as tk
+        from update_ui import UpdateManager
+        root = tk.Tk()
+        root.withdraw()
+        panel = NexusPanel(root)
+        panel.updates = UpdateManager(root, on_install=panel.close)
+        panel.updates.start()
+        panel.place_initial_window()
+        root.deiconify()
+        tc.register_ui_window(root)
+        if args.check_updates:
+            root.after(50, panel.updates.open)
+        root.mainloop()
 
 
 if __name__ == "__main__":

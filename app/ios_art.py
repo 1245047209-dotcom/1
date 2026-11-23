@@ -80,8 +80,10 @@ def _corner(radius):
 
 
 @lru_cache(maxsize=48)
-def rounded_surface_png(width, height, radius, color, background=None):
+def rounded_surface_png(width, height, radius, color, background=None, *, opacity=1.0):
     """Rounded rectangle with antialiased corners; middle rows are copied.
+
+    Opacity applies to both the fill and the rounded edges.
 
     With ``background`` the corners are blended onto that colour and the PNG is fully
     opaque. Tk on Windows composites partially transparent photos by reading the
@@ -91,13 +93,15 @@ def rounded_surface_png(width, height, radius, color, background=None):
     width, height = max(1, int(width)), max(1, int(height))
     radius = max(0, min(int(radius), width // 2, height // 2))
     r, g, b = rgb(color)
-    solid = bytes((r, g, b, 255))
+    alpha = round(255 * max(0.0, min(1.0, opacity)))
+    solid = bytes((r, g, b, alpha))
     corner = _corner(radius) if radius else ()
-    if background is not None and radius:
+    if background is not None:
         br, bg, bb = rgb(background)
         blend = lambda a: bytes((round(br + (r - br) * a / 255), round(bg + (g - bg) * a / 255),
                                  round(bb + (b - bb) * a / 255), 255))
-        corner = tuple(b"".join(blend(value) for value in row) for row in corner)
+        solid = blend(alpha)
+        corner = tuple(b"".join(blend(value * alpha / 255) for value in row) for row in corner)
         scanlines = bytearray()
         middle = b"\x00" + solid * width
         for y in range(height):
@@ -116,9 +120,9 @@ def rounded_surface_png(width, height, radius, color, background=None):
         if edge is None:
             scanlines += middle
             continue
-        alpha = corner[edge]
-        left = b"".join(bytes((r, g, b, value)) for value in alpha)
-        right = b"".join(bytes((r, g, b, value)) for value in reversed(alpha))
+        coverage = corner[edge]
+        left = b"".join(bytes((r, g, b, round(value * alpha / 255))) for value in coverage)
+        right = b"".join(bytes((r, g, b, round(value * alpha / 255))) for value in reversed(coverage))
         scanlines += b"\x00" + left + solid * (width - 2 * radius) + right
     return png(width, height, scanlines)
 
