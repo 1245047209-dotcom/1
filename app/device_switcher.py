@@ -1,8 +1,6 @@
 """Small canvas tabs for device and view selection, without native popup lists."""
 import tkinter as tk
-
-FONT = "Microsoft YaHei UI"
-
+import theme
 
 def pill(canvas, x1, y1, x2, y2, radius, fill, outline=""):
     points = (x1+radius, y1, x2-radius, y1, x2, y1, x2, y1+radius,
@@ -133,7 +131,7 @@ class SegmentedControl(tk.Canvas):
                 text = "#737d8b"
                 if self.hover == value:
                     pill(self, x1+1, 4, x2-1, height-4, 8, "#f6f7f9")
-            font = (FONT, 9, "bold" if active else "normal")
+            font = (theme.FONT, 9, "bold" if active else "normal")
             measure = lambda title: self.tk.call("font", "measure", font, title)
             title = label
             while len(title) > 1 and measure(title) > cell-52:

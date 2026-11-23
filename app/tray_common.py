@@ -36,6 +36,8 @@ DEFAULT_CONFIG = {
     "low_battery_alert": True,
     "gpu_animation": True,
     "theme": "system",
+    "glass_level": .48,
+    "glass_backdrop": True,   # iOS 版主窗口的毛玻璃背景
 }
 
 INTERVAL_CHOICES = [(30, "30 秒"), (60, "1 分钟"), (120, "2 分钟"),

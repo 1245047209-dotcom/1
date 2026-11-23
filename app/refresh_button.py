@@ -2,17 +2,19 @@
 from pathlib import Path
 import tkinter as tk
 import theme
+from toggle_switch import capsule_png, glass_capsule_png
 
 
 class RefreshButton(tk.Canvas):
     WIDTH, HEIGHT = 104, 42
+    LABEL_FONT = (theme.FONT, -15)
     LABELS = {"idle": "刷新", "loading": "刷新中", "success": "已更新", "error": "重试"}
 
     def __init__(self, master, command, ui=None):
         self.ui = ui
         super().__init__(master, width=ui.px(self.WIDTH) if ui else self.WIDTH,
                          height=ui.px(self.HEIGHT) if ui else self.HEIGHT,
-                         bg=theme.color(master, theme.Color("#f3f4f6", theme.BACKGROUND.dark)),
+                         bg=master.cget("bg"),
                          highlightthickness=0, takefocus=True,
                          cursor="hand2")
         self.command = command
@@ -22,13 +24,13 @@ class RefreshButton(tk.Canvas):
         self._frame = 0
         self._animation_id = None
         assets = Path(__file__).resolve().parent / "assets"
-        self._surfaces = self._load_frames(assets / "refresh-button.png", 104, 42, 12)
+        self._surfaces = {}
         self._symbols = self._load_frames(assets / "refresh-symbols.png", 18, 18, 27)
+        self._backdrop, self._backdrop_item = None, self.create_image(0, 0, anchor="nw")
         self._surface_item = self.create_image(0, 0, anchor="nw")
-        theme.style(self, bg=theme.Color("#f3f4f6", theme.BACKGROUND.dark))
+        theme.watch(self, self.apply_theme)
         self._symbol_item = self.create_image(16, 12, anchor="nw")
-        self._label_item = self.create_text(63, 21, fill="white",
-                                            font=("Microsoft YaHei UI", 9, "bold"))
+        self._label_item = self.create_text(63, 21, fill="white", font=self.LABEL_FONT)
         self.bind("<Enter>", self._motion)
         self.bind("<Motion>", self._motion)
         self.bind("<Leave>", self._leave)
@@ -40,6 +42,29 @@ class RefreshButton(tk.Canvas):
             self.bind(f"<KeyPress-{key}>", self._key_press)
             self.bind(f"<KeyRelease-{key}>", self._key_release)
         self._render()
+
+    def apply_theme(self):
+        self.configure(bg=self.master.cget("bg"))
+        self._render()
+
+    def set_backdrop(self, photo):
+        """Frosted-glass pixels behind the button (None: plain background colour)."""
+        self._backdrop = photo
+        self._render()
+
+    def _surface(self, index):
+        key = theme.is_dark(self), index if index in (1, 2) else 0, self._focused
+        if key not in self._surfaces:
+            face = theme.color(self, theme.ACTION_HOVER if index == 1 else theme.ACTION)
+            if index == 2:
+                face = theme.blend(face, "#000000", .16)
+            if self._focused:
+                edge = theme.color(self, theme.FOCUS)
+                plate = glass_capsule_png(96, 34, face, edge, edge, reflection=0)
+            else:
+                plate = capsule_png(96, 34, face)
+            self._surfaces[key] = tk.PhotoImage(master=self, data=plate, format="PNG")
+        return self._surfaces[key]
 
     def _load_frames(self, path, width, height, count):
         source = tk.PhotoImage(master=self, file=str(path))
@@ -143,15 +168,20 @@ class RefreshButton(tk.Canvas):
                 surface = 2
             elif self._hover and self.phase == "idle":
                 surface = 1
-        self.itemconfigure(self._surface_item, image=self._surfaces[surface + 6 * self._focused])
+        self.itemconfigure(self._surface_item, image=self._surface(surface))
         self.itemconfigure(self._symbol_item, image=self._symbols[symbol])
         self.itemconfigure(self._label_item, text=self.LABELS[self.phase],
-                           font=("Microsoft YaHei UI", 9, "bold"))
+                           font=self.LABEL_FONT)
         offset = int(surface == 2)
+        self.coords(self._surface_item, 4, 4)
         self.coords(self._symbol_item, 16, 12 + offset)
         self.coords(self._label_item, 63, 21 + offset)
+        # Screen-sized glass must not be rescaled with the logical items.
+        self.itemconfigure(self._backdrop_item, image="")
+        self.coords(self._backdrop_item, 0, 0)
         if self.ui:
             self.ui.canvas(self)
+        self.itemconfigure(self._backdrop_item, image=self._backdrop or "")
 
     def _stop_animation(self):
         if self._animation_id is not None:

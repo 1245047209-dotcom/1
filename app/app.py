@@ -98,16 +98,18 @@ def cli_dump() -> None:
 def build_ui():
     import tkinter as tk
     from tkinter import ttk, messagebox, scrolledtext
+    import theme
 
     BG = "#1b1c1f"
     PANEL = "#232529"
     PANEL2 = "#2b2e33"
     FG = "#e8e8ea"
     MUTED = "#9aa0a6"
-    FONT = ("Microsoft YaHei UI", 10)
+    FONT = (theme.FONT, 10)
     FONT_SMALL = ("Consolas", 9)
 
     root = tk.Tk()
+    theme.configure_fonts(root)
     root.title(APP_TITLE)
     root.configure(bg=BG)
     root.geometry("1180x760")
@@ -120,10 +122,10 @@ def build_ui():
     style.configure("Panel.TFrame", background=PANEL)
     style.configure("TLabel", background=BG, foreground=FG, font=FONT)
     style.configure("Panel.TLabel", background=PANEL, foreground=FG)
-    style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=("Microsoft YaHei UI", 9))
-    style.configure("H1.TLabel", background=BG, foreground=FG, font=("Microsoft YaHei UI", 15, "bold"))
+    style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=(theme.FONT, 9))
+    style.configure("H1.TLabel", background=BG, foreground=FG, font=(theme.FONT, 15, "bold"))
     style.configure("Big.TLabel", background=PANEL, foreground=ACCENT,
-                    font=("Microsoft YaHei UI", 34, "bold"))
+                    font=(theme.FONT, 34, "bold"))
     style.configure("TButton", background=PANEL2, foreground=FG, borderwidth=0,
                     focusthickness=0, padding=(12, 7), font=FONT)
     style.map("TButton",
@@ -140,7 +142,7 @@ def build_ui():
     style.configure("Treeview", background=PANEL, fieldbackground=PANEL, foreground=FG,
                     rowheight=25, borderwidth=0, font=FONT)
     style.configure("Treeview.Heading", background=PANEL2, foreground=MUTED,
-                    font=("Microsoft YaHei UI", 9, "bold"), borderwidth=0)
+                    font=(theme.FONT, 9, "bold"), borderwidth=0)
     style.map("Treeview", background=[("selected", "#35507e")],
               foreground=[("selected", "#ffffff")])
     style.configure("TEntry", fieldbackground=PANEL2, background=PANEL2,
@@ -222,15 +224,15 @@ def build_ui():
     tab_bat.columnconfigure(0, weight=1)
 
     ttk.Label(tab_bat, text="当前设备", style="Panel.TLabel",
-              foreground=MUTED, font=("Microsoft YaHei UI", 9)).grid(row=0, column=0, sticky="w")
+              foreground=MUTED, font=(theme.FONT, 9)).grid(row=0, column=0, sticky="w")
     lab_dev = ttk.Label(tab_bat, text="（未选择）", style="Panel.TLabel",
-                        font=("Microsoft YaHei UI", 12, "bold"))
+                        font=(theme.FONT, 12, "bold"))
     lab_dev.grid(row=1, column=0, sticky="w", pady=(0, 10))
 
     lab_level = ttk.Label(tab_bat, text="--", style="Big.TLabel")
     lab_level.grid(row=2, column=0, sticky="w")
     lab_status = ttk.Label(tab_bat, text="", style="Panel.TLabel",
-                           font=("Microsoft YaHei UI", 11))
+                           font=(theme.FONT, 11))
     lab_status.grid(row=3, column=0, sticky="w", pady=(0, 6))
 
     progress = ttk.Progressbar(tab_bat, mode="determinate", maximum=100,
@@ -289,7 +291,7 @@ def build_ui():
     ttk.Label(tab_raw, text="给不认识的设备用：先自动探出 Report ID，再试发命令看有没有回复，"
                             "最后到「手动标定」里把电量字节的位置填进去。",
               style="Panel.TLabel", foreground=MUTED,
-              font=("Microsoft YaHei UI", 9)).grid(row=2, column=0, sticky="w", pady=(0, 8))
+              font=(theme.FONT, 9)).grid(row=2, column=0, sticky="w", pady=(0, 8))
 
     txt_raw = scrolledtext.ScrolledText(tab_raw, height=18, font=FONT_SMALL,
                                         bg="#141517", fg="#b8f0c0",
@@ -304,7 +306,7 @@ def build_ui():
 
     ttk.Label(tab_cal, text="给不认识的设备定义读取方式，测试通过后保存，下次自动生效。",
               style="Panel.TLabel", foreground=MUTED,
-              font=("Microsoft YaHei UI", 9)).grid(row=0, column=0, columnspan=2,
+              font=(theme.FONT, 9)).grid(row=0, column=0, columnspan=2,
                                                    sticky="w", pady=(0, 10))
 
     v_iface = tk.StringVar()
@@ -325,7 +327,7 @@ def build_ui():
             row=row, column=1, sticky="w", pady=3)
         if hint:
             ttk.Label(tab_cal, text=hint, style="Panel.TLabel", foreground=MUTED,
-                      font=("Microsoft YaHei UI", 8)).grid(row=row, column=2,
+                      font=(theme.FONT, 8)).grid(row=row, column=2,
                                                            sticky="w", padx=8)
 
     ttk.Label(tab_cal, text="接口", style="Panel.TLabel").grid(row=1, column=0, sticky="w", pady=3)
@@ -338,7 +340,7 @@ def build_ui():
     cb_kind.grid(row=2, column=1, sticky="w", pady=3)
     ttk.Label(tab_cal, text="feature=读 Feature Report；output=发 Output Report 再收 Input Report",
               style="Panel.TLabel", foreground=MUTED,
-              font=("Microsoft YaHei UI", 8)).grid(row=2, column=2, sticky="w", padx=8)
+              font=(theme.FONT, 8)).grid(row=2, column=2, sticky="w", padx=8)
 
     field(3, "Report ID (hex)", v_rid, "比如 05 / 0E / A1")
     field(4, "请求字节 (hex)", v_req, "不含 Report ID，比如：15 00 00 01")

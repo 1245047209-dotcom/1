@@ -9,9 +9,6 @@ import tkinter as tk
 import zlib
 import theme
 
-OFF = theme.Color("#dfe2eb", "#424d66")
-
-
 def _rgb(color):
     return tuple(int(color[i:i+2], 16) for i in (1, 3, 5))
 
@@ -54,14 +51,38 @@ def capsule_png(width, height, color, *, opacity=1.):
     return _rgba_png(width, height, scanlines)
 
 
+@lru_cache(maxsize=128)
+def glass_capsule_png(width, height, face, rim, highlight, *, reflection=.42, opacity=1.):
+    """Render an antialiased rim and a soft highlight across the upper face."""
+    outer_alpha = _capsule_alpha(width, height)
+    inner_width, inner_height = width - 2, height - 2
+    inner_alpha = _capsule_alpha(inner_width, inner_height)
+    face, rim, highlight = map(_rgb, (face, rim, highlight))
+    scanlines = bytearray()
+    for y in range(height):
+        scanlines.append(0)
+        glint = reflection * max(0., 1. - y / (height * .72)) ** 2
+        tint = tuple(round(a + (b-a)*glint) for a, b in zip(face, highlight))
+        edge = rim if y >= height / 2 else tuple(round(a + (b-a) * .42) for a, b in zip(rim, highlight))
+        for x in range(width):
+            alpha = outer_alpha[y * width + x]
+            coverage = inner_alpha[(y-1)*inner_width + x-1] / alpha if alpha and 0 < x < width-1 and 0 < y < height-1 else 0
+            coverage = min(coverage, 1.)
+            scanlines.extend(round(a + (b-a)*coverage) for a, b in zip(edge, tint))
+            scanlines.append(round(alpha * opacity))
+    return _rgba_png(width, height, scanlines)
+
+
 @lru_cache(maxsize=192)
 def _image(width, height, position, track_color, focus_color, focused):
     """Render to PNG with subpixel edge coverage, preserving the theme colors."""
+    # iOS switch: flat track, round white thumb inset ~2 px, soft drop shadow.
     track = _rgb(track_color)
     thumb, focus = _rgb(theme.ON_PRIMARY.light), _rgb(focus_color)
     radius, cy = (height - 2) / 2, height / 2
     left, right = 1 + radius, width - 1 - radius
-    thumb_x, thumb_radius = left + (right - left) * position / 1000, (height - 6) / 2
+    thumb_radius = radius - max(1.5, height * .07)
+    thumb_x = left + (right - left) * position / 1000
     scanlines = bytearray()
     for y in range(height):
         scanlines.append(0)
@@ -73,6 +94,8 @@ def _image(width, height, position, track_color, focus_color, focused):
                 layers.append((focus, max(0, min(1, 1.5 - distance))))
             layers.append((track, _edge_coverage(distance)))
             thumb_distance = math.hypot(px - thumb_x, py - cy) - thumb_radius
+            thumb_shadow = math.hypot(px - thumb_x, py - cy - .9) - thumb_radius - .6
+            layers.append(((0, 0, 0), .16 * _edge_coverage(thumb_shadow) * _edge_coverage(distance)))
             layers.append((thumb, _edge_coverage(thumb_distance)))
             alpha, rgb = 0, [0., 0., 0.]
             for color, coverage in layers:
@@ -87,7 +110,7 @@ def _image(width, height, position, track_color, focus_color, focused):
 class Switch(tk.Canvas):
     def __init__(self, master, variable, *, scale=.85, command=None):
         self.variable, self.command, self.scale = variable, command, scale
-        self.default_width, self.default_height = round(46 * scale), round(26 * scale)
+        self.default_width, self.default_height = round(51 * scale), round(31 * scale)
         self.position = float(bool(variable.get()))
         self.focused, self.pressed, self.closed = False, False, False
         self.animation_id = None
@@ -160,7 +183,7 @@ class Switch(tk.Canvas):
             return
         width = max(12, self.winfo_width() if self.winfo_width() > 1 else self.default_width)
         height = max(8, self.winfo_height() if self.winfo_height() > 1 else self.default_height)
-        track = theme.color(self, theme.PRIMARY if self.variable.get() else OFF)
+        track = theme.blend(theme.color(self, theme.SWITCH_OFF), theme.color(self, theme.SWITCH_ON), self.position)
         image = _image(width, height, round(self.position * 1000), track,
                        theme.color(self, theme.FOCUS), self.focused)
         self.photo = tk.PhotoImage(master=self, data=image, format="PNG")

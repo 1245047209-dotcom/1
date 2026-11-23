@@ -3,6 +3,7 @@ from pathlib import Path
 import time
 import tkinter as tk
 from frame_pacer import FramePacer
+from toggle_switch import capsule_png
 import theme
 
 
@@ -10,13 +11,11 @@ class ViewSwitcher(tk.Canvas):
     WIDTH, HEIGHT = 224, 38
     PADDING, GAP, ICON_SIZE = 4, 4, 16
     DURATION = .18
-    COLORS = {"active": theme.ON_PRIMARY,
-              "idle": theme.Color("#7b8695", theme.MUTED.dark),
-              "hover": theme.Color("#303947", theme.TEXT.dark)}
+    COLORS = {"active": theme.TEXT, "idle": theme.MUTED, "hover": theme.TEXT}
 
     def __init__(self, master, *, ui, command, show_icons=True):
         super().__init__(master, width=ui.px(self.WIDTH), height=ui.px(self.HEIGHT),
-                         bg=theme.color(master, theme.SURFACE), highlightthickness=0, borderwidth=0,
+                         bg=master.cget("bg"), highlightthickness=0, borderwidth=0,
                          takefocus=True, cursor="hand2")
         self.ui, self.command = ui, command
         self.show_icons = show_icons
@@ -28,7 +27,7 @@ class ViewSwitcher(tk.Canvas):
         self.position = self.origin = self.target = 0.0
         self.started, self.after_id, self.closed = 0.0, None, False
         self.labels, self.icons = [], []
-        self.fonts = {state: ui.font(("Microsoft YaHei UI", -14,
+        self.fonts = {state: ui.font((theme.FONT, -14,
                                      "bold" if state == "active" else "normal"))
                       for state in self.COLORS}
         self.load_assets()
@@ -46,16 +45,26 @@ class ViewSwitcher(tk.Canvas):
     def load_assets(self):
         self.photos = {}
         directory = Path(__file__).resolve().parent / "assets" / "view-switcher"
-        names = ("track", "thumb", "hover", "focus")
+        text = theme.color(self, theme.TEXT)
+        track = theme.blend(theme.control_background(self), text, .07)
+        selected = theme.color(self, theme.SEGMENT)
+        for name, width, height, fill in (
+            ("track", self.WIDTH, self.HEIGHT, track),
+            ("thumb", self.cell_width, 30, selected),
+            ("hover", self.cell_width, 30, theme.blend(track, text, .055)),
+        ):
+            image = capsule_png(self.ui.px(width), self.ui.px(height), fill)
+            self.photos[name] = tk.PhotoImage(master=self, data=image, format="PNG")
+        self.photos["focus"] = self.ui.load_asset(directory / "focus.png", (self.ui.px(224), self.ui.px(38)))
         if self.show_icons:
-            names += tuple(f"{kind}-{state}" for kind in ("all", "single") for state in self.COLORS)
-        dimensions = {"track": (224, 38), "thumb": (112, 36), "hover": (106, 30), "focus": (224, 38)}
-        for name in names:
-            size = tuple(self.ui.px(value) for value in dimensions.get(name, (16, 16)))
-            self.photos[name] = self.ui.load_asset(directory / f"{name}.png", size)
+            size = self.ui.px(16)
+            for kind in ("all", "single"):
+                for state in ("idle", "hover"):
+                    name = f"{kind}-{state}"
+                    self.photos[name] = self.ui.load_asset(directory / f"{name}.png", (size, size))
 
     def apply_theme(self):
-        self.configure(bg=theme.color(self, theme.SURFACE))
+        self.configure(bg=self.master.cget("bg"))
         self.load_assets()
         if self.items:
             self.build()
@@ -91,7 +100,7 @@ class ViewSwitcher(tk.Canvas):
         self.create_image(0, 0, image=self.photos["track"], anchor="nw")
         self.hover_image = self.create_image(0, self.ui.px(4), image=self.photos["hover"],
                                              anchor="nw", state="hidden")
-        self.thumb_image = self.create_image(0, self.ui.px(1), image=self.photos["thumb"], anchor="nw")
+        self.thumb_image = self.create_image(0, self.ui.px(4), image=self.photos["thumb"], anchor="nw")
         self.labels, self.icons = [], []
         for _identifier, label, kind in self.items:
             if self.show_icons:
@@ -105,8 +114,6 @@ class ViewSwitcher(tk.Canvas):
     def update_content(self):
         if not self.items:
             return
-        # White content follows the dark surface rather than changing ahead of
-        # it, keeping the incoming tab legible while the thumb is travelling.
         states = tuple("active" if abs(self.position-index) <= .28 else
                        "hover" if index == self.hover else "idle" for index in range(len(self.items)))
         content_key = (self.items, self.selected, self.hover, self.keyboard_focus, states)
@@ -122,7 +129,8 @@ class ViewSwitcher(tk.Canvas):
             x = center - group_width / 2
             if self.show_icons:
                 self.coords(self.icons[index], x, self.ui.px(19))
-                self.itemconfigure(self.icons[index], image=self.photos[f"{kind}-{state}"])
+                icon_state = "idle" if state == "idle" else "hover"
+                self.itemconfigure(self.icons[index], image=self.photos[f"{kind}-{icon_state}"])
             self.coords(self.labels[index], x + icon_space, self.ui.px(19))
             self.itemconfigure(self.labels[index], font=font, fill=theme.color(self, self.COLORS[state]))
         visible_hover = self.hover is not None and self.items[self.hover][0] != self.selected
@@ -134,8 +142,8 @@ class ViewSwitcher(tk.Canvas):
 
     def place_thumb(self):
         # Only move this existing image per frame. All PNGs and text are reused.
-        x = self.PADDING + self.position * (self.cell_width + self.GAP) - 3
-        self.coords(self.thumb_image, x * self.ui.factor, self.ui.px(1))
+        x = self.PADDING + self.position * (self.cell_width + self.GAP)
+        self.coords(self.thumb_image, x * self.ui.factor, self.ui.px(4))
 
     def sample(self, now):
         progress = min(1.0, max(0.0, (now - self.started) / self.DURATION))

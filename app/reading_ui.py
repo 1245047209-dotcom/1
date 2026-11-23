@@ -10,6 +10,20 @@ def keep_newer(previous, incoming):
     return same and previous.checked_at > incoming.checked_at
 
 
+def relative_time(then, now=None):
+    """iOS-style age of a timestamp: 刚刚 / N 分钟前 / N 小时前 / M月D日."""
+    now = time.time() if now is None else now
+    seconds = max(0, now - then)
+    if seconds < 60:
+        return "刚刚"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} 分钟前"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} 小时前"
+    day = time.localtime(then)
+    return f"{day.tm_mon}月{day.tm_mday}日"
+
+
 class ReadingTimes:
     """Remember last successful reads without retaining old battery percentages."""
     def __init__(self):
@@ -24,9 +38,8 @@ class ReadingTimes:
             if value is not None and (part not in times or value >= times[part]):
                 times[part] = value
 
-    def label(self, key, reading, part=None):
-        if part is None and reading.status == "待适配电量":
-            return "电量协议待适配"
+    def _times(self, key, reading, part=None):
+        """(current success time, last success time, text when neither exists)."""
         last = self.last.get(key, {}).get(part or "device")
         if part is not None:
             known = not reading.error and ((reading.components or {}).get(part) or {}).get("level") is not None
@@ -37,10 +50,27 @@ class ReadingTimes:
                 value.get("level") is not None for value in (reading.components or {}).values()))
             current = reading.observed_at if known else None
             empty = "等待电量上报" if reading.connected is True else "等待设备连接" if reading.connected is False else "尚未读取电量"
+        return current, last, empty
+
+    def label(self, key, reading, part=None):
+        if part is None and reading.status == "待适配电量":
+            return "电量协议待适配"
+        current, last, empty = self._times(key, reading, part)
         if current is not None:
             return ("更新 " if part else "读取 ") + time.strftime("%H:%M:%S", time.localtime(current))
         if last is not None:
             return ("上次 " if part else "上次成功 ") + time.strftime("%H:%M:%S", time.localtime(last))
+        return empty
+
+    def ago(self, key, reading, part=None, now=None):
+        """Relative reading time for the iOS list: 刚刚 / 3 分钟前 / 上次读取 1 小时前."""
+        if part is None and reading.status == "待适配电量":
+            return "电量协议待适配"
+        current, last, empty = self._times(key, reading, part)
+        if current is not None:
+            return relative_time(current, now)
+        if last is not None:
+            return "上次读取 " + relative_time(last, now)
         return empty
 
     def retain(self, keys):

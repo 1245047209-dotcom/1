@@ -5,11 +5,11 @@ from device_readers import KEYBOARD_TITLE, Reading, stamp_observation
 from saved_devices import DEFAULT_DEVICE_ID
 
 CARD_MARGIN = 16
-CARD_PADDING = 10
-CARD_GAP = 14
-CARD_HEIGHT = 198
-EMPTY_HEIGHT = 150
-OVERVIEW_TOP = 125
+CARD_PADDING = 12
+CARD_GAP = 12
+CARD_HEIGHT = 168
+EMPTY_HEIGHT = 142
+OVERVIEW_TOP = 111
 FOOTER_HEIGHT = 40
 
 
@@ -80,3 +80,47 @@ def fit_ppm(data, max_width, max_height, clockwise=False):
                 bottom = pixels[offsets[2] + channel] * (1 - fx) + pixels[offsets[3] + channel] * fx
                 output[dest + channel] = round(top * (1 - fy) + bottom * fy)
     return f"P6\n{target_width} {target_height}\n255\n".encode() + output
+
+
+# ---- iOS layout (v73-iOS): battery widget + grouped list -------------------
+# Sized after the iOS mock-up: a narrow, tall window with generous spacing.
+IOS_HEADER = 122          # large title area above the scrolling overview
+IOS_BOTTOM = 14           # breathing room under the list (no footer bar)
+IOS_MARGIN = 16
+IOS_WIDGET_TOP = 4
+IOS_WIDGET_PAD = 20
+IOS_RING = 64
+IOS_RING_ROW = 122        # ring + percentage + label
+IOS_RING_GAP = 10
+IOS_RING_COLUMNS = 4
+IOS_SECTION = 48          # "我的设备" header between the widget and the list
+IOS_ROW = 72
+IOS_NOTE = 44             # footnote under the list ("耳机显示…")
+IOS_EMPTY = 142
+
+
+def ios_widget_height(ring_count):
+    rows = max(1, -(-ring_count // IOS_RING_COLUMNS))
+    return 2 * IOS_WIDGET_PAD + rows * IOS_RING_ROW + (rows - 1) * IOS_RING_GAP - 6
+
+
+def ios_layout(width, ring_count, row_count, note=False):
+    """Rectangles (logical px) for the widget, every ring slot and every list row."""
+    if not row_count:
+        return {"widget": None, "rings": [], "section_y": None, "group": None, "rows": [],
+                "note_y": None, "height": IOS_EMPTY}
+    left, right = IOS_MARGIN, width - IOS_MARGIN
+    widget = (left, IOS_WIDGET_TOP, right, IOS_WIDGET_TOP + ios_widget_height(ring_count))
+    column = (right - left - 20) / IOS_RING_COLUMNS
+    rings = []
+    for index in range(ring_count):
+        row, col = divmod(index, IOS_RING_COLUMNS)
+        x = left + 10 + column * (col + .5)
+        y = widget[1] + IOS_WIDGET_PAD + row * (IOS_RING_ROW + IOS_RING_GAP)
+        rings.append((x, y))
+    group_top = widget[3] + IOS_SECTION
+    rows = [(left, group_top + i * IOS_ROW, right, group_top + (i + 1) * IOS_ROW) for i in range(row_count)]
+    group = (left, group_top, right, rows[-1][3])
+    return {"widget": widget, "rings": rings, "section_y": widget[3] + 30, "group": group, "rows": rows,
+            "note_y": group[3] + 26 if note else None,
+            "height": group[3] + (IOS_NOTE if note else 16)}

@@ -5,9 +5,6 @@ import tkinter as tk
 from frame_pacer import FramePacer
 import theme
 
-FONT = "Microsoft YaHei UI"
-
-
 class DeviceNavigation(tk.Canvas):
     HEIGHT, DURATION = 38, .20
     COLORS = {"active": theme.Color("#26313f", theme.TEXT.dark),
@@ -28,7 +25,7 @@ class DeviceNavigation(tk.Canvas):
         self.photos, self.surfaces = {}, {}
         self.position = self.origin = self.target = 0.0
         self.started, self.after_id, self.closed = 0.0, None, False
-        self.fonts = {state: ui.font((FONT, -14, "bold" if state == "active" else "normal"))
+        self.fonts = {state: ui.font((theme.FONT, -14, "bold" if state == "active" else "normal"))
                       for state in self.COLORS}
         self.load_assets()
         theme.watch(self, self.apply_theme)

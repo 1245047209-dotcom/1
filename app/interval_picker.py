@@ -3,13 +3,7 @@ from __future__ import annotations
 
 import tkinter as tk
 import theme
-
-
-FONT = "Microsoft YaHei UI"
-HOVER = theme.Color("#f3ecf7", "#34303d")
-HIGHLIGHT = theme.Color("#e6dbf0", "#494051")
-MENU_SHADOW = theme.Color("#ded7e8", "#111015")
-
+from toggle_switch import capsule_png, glass_capsule_png
 
 def _rounded(canvas, x1, y1, x2, y2, radius, **options):
     return canvas.create_polygon(
@@ -21,8 +15,9 @@ def _rounded(canvas, x1, y1, x2, y2, radius, **options):
 
 
 class IntervalPicker(tk.Canvas):
-    def __init__(self, master, overlay, variable, values, *, scale=.85, show_clock=True, command=None):
+    def __init__(self, master, overlay, variable, values, *, scale=.85, show_clock=True, command=None, flat=False):
         self.scale = scale
+        self.flat = flat
         self.show_clock = show_clock
         self.command = command
         self.overlay, self.variable, self.values = overlay, variable, tuple(values)
@@ -70,30 +65,58 @@ class IntervalPicker(tk.Canvas):
         height = max(self.winfo_height(), self.default_height)
         mid_y = height / 2
         expanded = self.popup is not None
-        fill = theme.color(self, theme.SELECTED if expanded else HOVER if self.hovered else theme.SOFT)
-        border = theme.color(self, theme.FOCUS if self.focused or expanded else theme.EDGE)
-        _rounded(self, 1, 1, width - 1, height - 1, self.p(12), fill=fill, outline=border)
+        text = theme.color(self, theme.TEXT)
+        muted = theme.color(self, theme.MUTED)
+        if self.flat:
+            self._draw_flat(width, height, mid_y, expanded, text, muted)
+            return
+        fill = theme.blend(theme.control_background(self), text, .09 if expanded or self.hovered else .05)
+        if self.focused:
+            edge = theme.color(self, theme.FOCUS)
+            data = glass_capsule_png(width-2, height-2, fill, edge, edge, reflection=0)
+        else:
+            data = capsule_png(width-2, height-2, fill)
+        self.plate = tk.PhotoImage(master=self, format="png", data=data)
+        self.create_image(1, 1, image=self.plate, anchor="nw")
         if self.show_clock:
             clock_x, radius = self.p(18), self.p(7)
             self.create_oval(clock_x - radius, mid_y - radius, clock_x + radius, mid_y + radius,
-                             outline=theme.color(self, theme.ACCENT), width=self.p(1.4))
+                             outline=muted, width=self.p(1.4))
             self.create_line(clock_x, mid_y - self.p(4), clock_x, mid_y, clock_x + self.p(3), mid_y,
-                             fill=theme.color(self, theme.ACCENT), width=self.p(1.4), capstyle="round", joinstyle="round")
-        self.create_text(self.p(32 if self.show_clock else 14), mid_y, text=self.variable.get(), anchor="w", fill=theme.color(self, theme.TEXT),
-                         font=(FONT, -self.p(14), "bold"))
+                             fill=muted, width=self.p(1.4), capstyle="round", joinstyle="round")
+        self.create_text(self.p(32 if self.show_clock else 14), mid_y, text=self.variable.get(),
+                         anchor="w", fill=text, font=(theme.FONT, -self.p(14)))
         arrow_x, half_width = width - self.p(16), self.p(4)
         side_y, center_y = (mid_y + 2, mid_y - 2) if expanded else (mid_y - 2, mid_y + 2)
         self.create_line(arrow_x - half_width, side_y, arrow_x, center_y, arrow_x + half_width, side_y,
-                         fill=theme.color(self, theme.ACCENT), width=self.p(1.7), capstyle="round", joinstyle="round")
+                         fill=muted, width=self.p(1.7), capstyle="round", joinstyle="round")
+
+    def _draw_flat(self, width, height, mid_y, expanded, text, muted):
+        """iOS value cell: grey text and an up/down chevron, no plate until hovered."""
+        if self.focused or expanded or self.hovered:
+            fill = theme.blend(theme.control_background(self), text, .07)
+            if self.focused:
+                edge = theme.color(self, theme.FOCUS)
+                data = glass_capsule_png(width-2, height-2, fill, edge, edge, reflection=0)
+            else:
+                data = capsule_png(width-2, height-2, fill)
+            self.plate = tk.PhotoImage(master=self, format="png", data=data)
+            self.create_image(1, 1, image=self.plate, anchor="nw")
+        self.create_text(width - self.p(27), mid_y, text=self.variable.get(), anchor="e",
+                         fill=text if expanded or self.hovered else muted, font=(theme.FONT, -self.p(14)))
+        x, half = width - self.p(15), self.p(3.5)
+        for centre, direction in ((mid_y - self.p(4), -1), (mid_y + self.p(4), 1)):
+            self.create_line(x - half, centre - direction * half / 2, x, centre + direction * half / 2,
+                             x + half, centre - direction * half / 2, fill=muted, width=self.p(1.6),
+                             capstyle="round", joinstyle="round")
 
     def _draw_popup(self):
         popup = self.popup
         popup.delete("all")
         width, height = self.popup_width, self.row_height * len(self.values) + 2 * self.padding
-        _rounded(popup, self.p(2), self.p(3), width - 1, height - 1, self.p(12),
-                 fill=theme.color(self, MENU_SHADOW), outline="")
-        _rounded(popup, 1, 1, width - self.p(3), height - self.p(4), self.p(12),
-                 fill=theme.color(self, theme.SURFACE), outline=theme.color(self, theme.LINE))
+        surface, text = theme.color(self, theme.SURFACE), theme.color(self, theme.TEXT)
+        _rounded(popup, 1, 1, width - 1, height - 1, self.p(12),
+                 fill=surface, outline=theme.color(self, theme.EDGE))
         highlight = self.active if self.pointer_row is None else self.pointer_row
         for index, value in enumerate(self.values):
             top = self.padding + index * self.row_height
@@ -102,14 +125,13 @@ class IntervalPicker(tk.Canvas):
             if selected or index == highlight:
                 _rounded(popup, self.padding, top + 1, width - self.padding - self.p(2),
                          top + self.row_height - 1, self.p(8),
-                         fill=theme.color(self, HIGHLIGHT if index == highlight else theme.SOFT), outline="")
+                         fill=theme.blend(surface, text, .10 if index == highlight else .05), outline="")
             popup.create_text(self.p(15), mid_y, text=value, anchor="w",
-                              fill=theme.color(self, theme.ACCENT if selected else theme.TEXT),
-                              font=(FONT, -self.p(14), "bold" if selected else "normal"))
+                              fill=text, font=(theme.FONT, -self.p(14)))
             if selected:
                 check_x = width - self.p(23)
                 popup.create_line(check_x - self.p(4), mid_y, check_x - self.p(1), mid_y + self.p(3),
-                                  check_x + self.p(5), mid_y - self.p(4), fill=theme.color(self, theme.ACCENT),
+                                  check_x + self.p(5), mid_y - self.p(4), fill=text,
                                   width=self.p(2), capstyle="round", joinstyle="round")
 
     def _open(self):

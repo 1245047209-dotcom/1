@@ -22,16 +22,18 @@ from device_layout import (
     card_rectangles, content_height, read_device_batch,
 )
 from search_window import window_work_area
+from device_layout import IOS_BOTTOM, IOS_HEADER, IOS_MARGIN, IOS_RING, IOS_RING_COLUMNS, IOS_RING_ROW, ios_layout
+from ios_art import ring_png, rounded_surface_png
 
 ASSETS = Path(__file__).resolve().parent / "assets"
-OFFLINE_BADGE = theme.Color("#eeebf2", "#302e36")
-FONT = "Microsoft YaHei UI"
 UI_SCALE = .85
-MIN_WIDTH, DEFAULT_WIDTH, MAX_WIDTH = 540, 640, 880
+MIN_WIDTH, DEFAULT_WIDTH, MAX_WIDTH = 440, 484, 880   # iOS: narrow and tall
+RING_KINDS = {"keyboard": "键盘", "mouse": "鼠标", "beats-studio-buds": "耳机"}
+EARBUD_NOTE = "耳机显示左右耳中较低的一侧。"
 WINDOW_MARGIN = 16
-BADGE_WIDTH = 86
-HEADER_BADGE_HEIGHT = 28
-DEVICE_BADGE_HEIGHT = 26
+BATTERY_PARTS = (("left", "左耳"), ("right", "右耳"), ("case", "充电仓"))
+COMPONENT_BATTERY_ICON_WIDTH = 28
+LOW_LEVEL = 20          # iOS turns the battery ring red at 20 %
 
 
 def clipped_label(canvas, text, font, max_width):
@@ -76,11 +78,11 @@ def rounded_rect(canvas, x1, y1, x2, y2, radius, fill, outline="", width=1, tags
                            fill=outline, width=width, tags=tag)
 
 
-def draw_card_surface(canvas, x1, y1, x2, y2, *, product=False):
+def draw_card_surface(canvas, x1, y1, x2, y2):
     """Stretch the card artwork while preserving its rim, corners and shadow."""
     import tkinter as tk
 
-    name, padding = ("product-surface.png", 12) if product else ("card-surface.png", 32)
+    name, padding = "card-surface.png", 32
     width, height = round(x2 - x1) + 2*padding, round(y2 - y1) + 2*padding
     asset = theme.asset(canvas, ASSETS / name)
     if not hasattr(canvas, "_card_surfaces"):
@@ -102,11 +104,10 @@ def draw_card_surface(canvas, x1, y1, x2, y2, *, product=False):
                     tile = tile.zoom(dw if sw == 1 else 1, dh if sh == 1 else 1)
                 surface.tk.call(str(surface), "copy", str(tile), "-to", dx, dy)
         canvas._card_surfaces[name] = asset, source, (width, height), surface
-    tags = ("shape", "product_surface") if product else "shape"
-    return canvas.create_image(x1-padding, y1-padding, image=surface, anchor="nw", tags=tags)
+    return canvas.create_image(x1-padding, y1-padding, image=surface, anchor="nw", tags="shape")
 
 
-def battery_photo(canvas, level: Optional[int], charging: bool = False):
+def battery_photo(canvas, level: Optional[int], charging: bool = False, *, compact=False):
     """Reuse the icon atlas for initial layouts and in-place battery updates."""
     import tkinter as tk
 
@@ -133,7 +134,14 @@ def battery_photo(canvas, level: Optional[int], charging: bool = False):
         image.tk.call(str(image), "copy", str(sheet),
                       "-from", sx, sy, sx + width, sy + height, "-to", 0, 0)
         cache[index] = image
-    return cache[index]
+    if not compact:
+        return cache[index]
+    key = index, "compact"
+    if key not in cache:
+        source = canvas.tk.call(str(cache[index]), "data", "-format", "png")
+        data = root._nexus_ui.native.resize(source, COMPONENT_BATTERY_ICON_WIDTH, COMPONENT_BATTERY_ICON_WIDTH // 2)
+        cache[key] = tk.PhotoImage(master=canvas, data=data, format="PNG")
+    return cache[key]
 
 
 def battery_icon(canvas, x, y, level: Optional[int], charging: bool = False):
@@ -230,10 +238,10 @@ def draw_component_batteries(canvas, x, y, components, *, size=13):
         level = part.get("level")
         charging = part.get("charging") is True
         row_y = y + index * 27
-        canvas.create_text(x, row_y, text=label, anchor="w", fill=theme.color(canvas, theme.MUTED), font=(FONT, 9))
+        canvas.create_text(x, row_y, text=label, anchor="w", fill=theme.color(canvas, theme.MUTED), font=(theme.FONT, 9))
         battery_icon(canvas, x + 46, row_y - 7, level, charging)
         value = f"{level}%" if level is not None else "--"
-        font = (FONT, size, "bold")
+        font = (theme.FONT, size, "bold")
         canvas.create_text(x + 86, row_y, text=value,
                            anchor="w", fill=theme.color(canvas, theme.ACCENT) if charging else theme.color(canvas, theme.TEXT) if level is not None else theme.color(canvas, theme.MUTED), font=font)
 
@@ -263,6 +271,7 @@ class NexusPanel:
         self.root = root
         cfg = tc.load_config()
         self.appearance = theme.install(root, cfg.get("theme"))
+        self.appearance.glass_level = theme.glass_value(cfg.get("glass_level", .48))
         theme.style(root, bg=theme.BACKGROUND)
         theme.track_title_bar(root)
         from ui_scale import UIScale
@@ -283,7 +292,6 @@ class NexusPanel:
         self.visible_devices = {}
         brand_path = ASSETS / "nexus-brand.png"
         self.chrome_images = {}
-        self.badge_images = {}
         self.window_icon_photos = [
             tk.PhotoImage(master=root, file=str(brand_path.parent / f"nexus-window-{size}.png"))
             for size in (16, 32, 48, 256)]
@@ -358,7 +366,6 @@ class NexusPanel:
         from aula_discovery import AulaDiscovery
         self.aula_discovery = AulaDiscovery()
         self.discovery_refresh_pending = False
-        self.overview_runtime_items = {}
         self.low_battery_notifier = LowBatteryNotifier(
             enabled=lambda: bool(tc.load_config().get("low_battery_alert", True)))
         self.busy = False
@@ -380,14 +387,27 @@ class NexusPanel:
             self.canvas, root, self.theme_choice, theme.MODE_LABELS.values(),
             scale=self.ui.factor, show_clock=False, command=self.select_theme,
         )
-        self.receiver_button = Button(self.canvas, "搜索设备", self.open_receiver_search,
-                                      scale=self.ui.factor, width=101, height=36, background=theme.SURFACE)
-        self.settings_button = Button(self.canvas, "设置", self.open_settings,
-                                      scale=self.ui.factor, width=68, height=28)
+        from ios_controls import IconButton
+        self.receiver_button = IconButton(self.canvas, "add", self.open_receiver_search, ui=self.ui, label="添加设备")
+        self.settings_button = IconButton(self.canvas, "settings", self.open_settings, ui=self.ui, label="设置")
+        self.row_hits = []
+        from glass import Backdrop
+        self.glass = Backdrop(root, self.ui.native)
+        self.glass_enabled = bool(cfg.get("glass_backdrop", True))
+        self.glass_items = []        # [(canvas, item, width px, height px, role, radius px)]
+        self.glass_buttons = []
+        self._glass_photos = {}
+        self._glass_after = None
+        self._glass_pending = []
+        self.device_sheet = None
+        self.sheet_min_height = 0   # logical height an open details sheet needs
+        self.last_refresh_at = None
+        self._ios_images = {}
         self.overview_canvas = theme.widget(SceneCanvas, self.canvas, bg=theme.BACKGROUND,
                                            highlightthickness=0, yscrollincrement=self.ui.px(24))
-        self.overview_scrollbar = ttk.Scrollbar(self.canvas, orient="vertical", command=self.overview_canvas.yview)
-        self.overview_canvas.configure(yscrollcommand=self.overview_scrollbar.set)
+        from ios_controls import ThinScrollbar
+        self.overview_scrollbar = ThinScrollbar(self.canvas, self.overview_canvas.yview, p=self.ui.px)
+        self.overview_canvas.configure(yscrollcommand=self._overview_scrolled)
         self.overview_scrollable = False
         self._content_mode = None
         self.device_menu = theme.widget(tk.Menu, self.overview_canvas, tearoff=False,
@@ -395,6 +415,7 @@ class NexusPanel:
                                         activeforeground=theme.TEXT)
         self.overview_canvas.bind("<ButtonRelease-1>", self.overview_click)
         self.overview_canvas.bind("<ButtonRelease-3>", self.overview_click)
+        self.overview_canvas.bind("<Motion>", self.overview_motion, add="+")
         self.overview_canvas.bind("<MouseWheel>", lambda event: self.overview_canvas.yview_scroll(
             -int(event.delta / 120) * 3, "units") if self.overview_scrollable else None)
         from card_hover import CardHover
@@ -409,6 +430,7 @@ class NexusPanel:
         self._positioned = False
         root.resizable(True, False)
         root.bind("<Configure>", self.on_configure)
+        root.bind("<Configure>", self.glass_moved, add="+")
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<F5>", self.refresh_shortcut)
         root.bind("<Control-r>", self.refresh_shortcut)
@@ -426,7 +448,95 @@ class NexusPanel:
         return theme.color(getattr(self, "root", None), swatch)
 
     def fade_background(self):
-        return self.color(theme.BACKGROUND)
+        average = getattr(getattr(self, "glass", None), "average", None)
+        return average if self.glass_on() and average else self.color(theme.BACKGROUND)
+
+    # ---- frosted glass --------------------------------------------------------------
+    def glass_on(self):
+        return bool(getattr(self, "glass_enabled", False)) and getattr(self, "glass", None) is not None \
+            and getattr(self, "_glass_ready", False)
+
+    def glass_photo(self, x, y, width, height, role, radius=0):
+        import tkinter as tk
+        dark = theme.is_dark(self.root)
+        key = (round(x), round(y), width, height, role, radius, dark, self.glass.signature)
+        photo = self._glass_photos.get(key)
+        if photo is None:
+            data = self.glass.image_data(x, y, width, height, role, dark, radius)
+            if data is None:
+                return None
+            photo = tk.PhotoImage(master=self.root, data=data, format="PNG")
+            self._glass_photos[key] = photo
+            while len(self._glass_photos) > 16:
+                self._glass_photos.pop(next(iter(self._glass_photos)))
+        return photo
+
+    def add_glass(self, canvas, x, y, width, height, role, radius=0, below=None):
+        """Create a glass image at physical canvas coordinates and keep it for refreshes."""
+        origin_x = self.root.winfo_rootx() + (0 if canvas is self.canvas else round(canvas.winfo_x()))
+        origin_y = self.root.winfo_rooty() + (0 if canvas is self.canvas else self.ui.px(IOS_HEADER))
+        photo = self.glass_photo(origin_x + x - canvas.canvasx(0), origin_y + y - canvas.canvasy(0),
+                                 width, height, role, radius)
+        if photo is None:
+            return None
+        item = canvas.create_image(x, y, image=photo, anchor="nw", tags=("shape", "surface", "glass"))
+        if below is None:
+            canvas.tag_lower(item)
+        else:
+            canvas.tag_lower(item, below)
+        self.glass_items.append((canvas, item, width, height, role, radius))
+        return item
+
+    def refresh_glass(self):
+        """Re-sample the glass after the window moved or the list scrolled (no relayout)."""
+        self._glass_after = None
+        if not self.glass_on() or not self.root.winfo_exists():
+            return
+        sheet = getattr(self, "device_sheet", None)
+        if self.transition.active or getattr(sheet, "animating", False):
+            self.schedule_glass(120)  # never re-sample during an animation
+            return
+        if not self.glass.prepare():
+            self.draw()
+            return
+        for canvas, item, width, height, role, radius in list(self.glass_items):
+            try:
+                if role == "base" and canvas is self.overview_canvas:
+                    canvas.coords(item, 0, canvas.canvasy(0))
+                x, y = canvas.coords(item)[:2]
+                photo = self.glass_photo(canvas.winfo_rootx() + x - canvas.canvasx(0),
+                                         canvas.winfo_rooty() + y - canvas.canvasy(0), width, height, role, radius)
+                if photo is not None:
+                    canvas.itemconfigure(item, image=photo)
+            except Exception:  # an item from a replaced scene
+                continue
+        for button in self.glass_buttons:
+            width, height = button.winfo_width(), button.winfo_height()
+            if width > 1:
+                button.set_backdrop(self.glass_photo(button.winfo_rootx(), button.winfo_rooty(), width, height, "base"))
+        if self.glass.average:
+            for canvas in (self.canvas, self.overview_canvas):
+                canvas.configure(bg=self.glass.average)
+            self.transition.set_background(self.glass.average)
+
+    def schedule_glass(self, delay=150):
+        if not self.glass_on():
+            return
+        if self._glass_after is not None:
+            self.root.after_cancel(self._glass_after)
+        self._glass_after = self.root.after(delay, self.refresh_glass)
+
+    def glass_moved(self, event):
+        if event.widget is self.root:
+            self.schedule_glass()
+
+    def _overview_scrolled(self, first, last):
+        self.overview_scrollbar.set(first, last)
+        if self.glass_on():
+            for canvas, item, _w, _h, role, _r in self.glass_items:
+                if canvas is self.overview_canvas and role == "base":
+                    canvas.coords(item, 0, canvas.canvasy(0))
+            self.schedule_glass(120)
 
     def chrome_image(self, filename):
         import tkinter as tk
@@ -437,6 +547,7 @@ class NexusPanel:
         return self.chrome_images[path]
 
     def apply_theme(self):
+        self._glass_photos.clear()
         self.transition.set_background(self.fade_background())
         self.card_hover.reset_assets()
         self.draw()
@@ -492,7 +603,7 @@ class NexusPanel:
             self.keyboard_image_error = f"产品图加载失败：{exc}"
 
     def start_drag(self, event):
-        if event.y <= self.ui.px(68):
+        if event.y <= self.ui.px(IOS_HEADER):
             self._drag = (event.x_root - self.root.winfo_x(),
                           event.y_root - self.root.winfo_y())
         else:
@@ -569,6 +680,8 @@ class NexusPanel:
                 self.low_battery_notifier.check(reading)
             success = reading.ok or (reading.connected is True and reading.status in ("待适配电量", "未上报电量"))
         self.busy = False
+        if success:
+            self.last_refresh_at = time.time()
         self.refresh_button.set_state("success" if success else "error")
         if isinstance(reading, dict) and identity_changed:
             self.draw()
@@ -600,6 +713,12 @@ class NexusPanel:
 
     def close(self):
         self.root._nexus_closing = True
+        sheet = getattr(self, "device_sheet", None)
+        if sheet is not None:
+            sheet.close(redraw=False)
+        if getattr(self, "_glass_after", None) is not None:
+            self.root.after_cancel(self._glass_after)
+            self._glass_after = None
         discovery = getattr(self, "aula_discovery", None)
         if discovery is not None:
             discovery.close()
@@ -624,22 +743,6 @@ class NexusPanel:
             if timer is not None:
                 self.root.after_cancel(timer)
         self.root.destroy()
-
-    def update_runtime_display(self):
-        transition = getattr(self, "transition", None)
-        if transition is not None and transition.phase == "out":
-            return
-        item = self.overview_runtime_items.get(DEFAULT_DEVICE_ID)
-        if item is None:
-            return
-        reading = self.readings.get(DEFAULT_DEVICE_ID)
-        text = "暂不可用"
-        if reading and reading.ok:
-            charging = reading.status in ("charging", "充电中")
-            view = get_runtime_view(reading.level, charging=charging, valid=True)
-            text = "充电中，暂不估算" if charging else format_remaining(view["hours"], live=True)
-        if self.overview_canvas.itemcget(item, "text") != text:
-            self.overview_canvas.itemconfigure(item, text=text)
 
     def runtime_tick(self):
         self.runtime_after_id = None
@@ -737,47 +840,34 @@ class NexusPanel:
         self.live.link(group, name, canvas, (item,), **initial)
         return item
 
-    def badge_style(self, fill, height):
-        import tkinter as tk
-        from toggle_switch import capsule_png
+    def card_battery_photo(self, canvas, reading, part):
+        if reading.error:
+            return battery_photo(canvas, None, compact=part is not None)
+        if part is None:
+            return battery_photo(canvas, reading.level, reading.status in ("charging", "充电中"))
+        value = (reading.components or {}).get(part) or {}
+        return battery_photo(canvas, value.get("level"), value.get("charging") is True, compact=True)
 
-        width, height = self.ui.px(BADGE_WIDTH), self.ui.px(height)
-        key = width, height, fill
-        if key not in self.badge_images:
-            image = tk.PhotoImage(master=self.root, data=capsule_png(width, height, fill), format="PNG")
-            name = str(image)
-            self.badge_images[key] = image
-            # Keep the exact pixel coverage when the rest of the canvas is scaled.
-            self.ui.images[name] = image
-            self.transition.opacity_sources[name] = (
-                lambda opacity: capsule_png(width, height, fill, opacity=opacity)
-            )
-        return {"image": str(self.badge_images[key])}
-
-    def live_badge(self, canvas, group, x, y, height, fill):
-        style = self.badge_style(fill, height)
-        item = canvas.create_image(x, y, tags="status_badge", **style)
-        self.live.link(group, "badge_bg", canvas, (item,), **style)
-
-    def live_battery(self, canvas, group, name, x, y, level, charging=False):
-        item = battery_icon(canvas, x, y, level, charging)
-        physical = str(self.ui.image(canvas.itemcget(item, "image")))
-        self.live.link(group, name, canvas, (item,), image=physical)
+    def live_battery(self, canvas, key, reading, part, x, y):
+        name = f"{part}_battery" if part is not None else "battery"
+        photo = self.card_battery_photo(canvas, reading, part)
+        item = canvas.create_image(x, y, image=photo, anchor="w", tags="battery_icon")
+        self.live.link(key, name, canvas, (item,), image=str(self.ui.image(str(photo))))
 
     def reading_styles(self, key, reading):
         known_parts = not reading.error and any(
             part.get("level") is not None for part in (reading.components or {}).values())
         online = reading.connected is True or reading.ok or known_parts
         if online and reading.status == "待适配电量":
-            state, color = "电量待适配", self.color(theme.WARNING)
+            state = "电量待适配"
         elif reading.error:
-            state, color = ("读取暂不可用", self.color(theme.DANGER)) if online else ("未连接", self.color(theme.MUTED))
+            state = "读取暂不可用" if online else "未连接"
         elif reading.ok or known_parts:
-            state, color = component_charging_text(reading.components) or reading.status or "设备在线", self.color(theme.ACCENT)
+            state = component_charging_text(reading.components) or reading.status or "设备在线"
         elif reading.status in ("待适配电量", "未上报电量"):
-            state, color = reading.status, self.color(theme.WARNING)
+            state = reading.status
         else:
-            state, color = "读取中", self.color(theme.MUTED)
+            state = "未连接" if reading.connected is False else "读取中"
         charging = reading.status in ("charging", "充电中")
         power = "正在充电" if charging else "已充满" if reading.status in ("full", "已充满") else "电池供电"
         if reading.status == "已接电，未充电":
@@ -800,21 +890,26 @@ class NexusPanel:
             caption = "原生查询 · 每 5 秒核对"
         elif reading.source == "Windows 蓝牙" and reading.ok:
             caption = "来自系统蓝牙上报"
+        summary, tone = state, theme.MUTED
+        if online and reading.error:
+            tone = theme.WARNING
+        elif online and (reading.ok or known_parts):
+            is_charging = charging or any(part.get("charging") is True for part in (reading.components or {}).values())
+            summary, tone = ("充电中", theme.ACCENT) if is_charging else ("已连接", theme.HEALTHY)
+        elif online:
+            summary, tone = "电量未上报" if state == "读取中" else state, theme.WARNING
         values = {
-            "badge_bg": {"fill": self.color(theme.ONLINE_SURFACE if online else OFFLINE_BADGE)},
-            "badge": {"text": "已连接" if online else "未连接" if reading.error else "读取中",
-                      "fill": self.color(theme.HEALTHY if online else theme.MUTED)},
-            "state": {"text": "●  " + state, "fill": color},
-            "status": {"text": state, "fill": color},
-            "status_dot": {"fill": color},
+            "status": {"text": state},
+            "card_status": {"text": summary, "fill": self.color(theme.MUTED)},
+            "card_dot": {"fill": self.color(tone)},
             "level": {"text": reading.display_level if reading.ok else "--", "fill": self.color(theme.TEXT) if reading.ok else self.color(theme.MUTED)},
             "power": {"text": power, "fill": self.color(theme.TEXT)},
             "caption": {"text": caption, "fill": self.color(theme.MUTED)},
             "timestamp": {"text": self.reading_times.label(key, reading), "fill": self.color(theme.MUTED)},
-            "runtime": {"fill": self.color(theme.ACCENT) if reading.ok else self.color(theme.MUTED)},
             "detail": {"text": reading.error or reading.detail or "等待设备电量回复", "fill": self.color(theme.MUTED)},
         }
-        for part in ("left", "right", "case"):
+        values.update(self.ios_styles(key, reading, summary, online))
+        for part, _label in BATTERY_PARTS:
             value = ((reading.components or {}).get(part) or {}) if not reading.error else {}
             level = value.get("level")
             values[part+"_level"] = {"text": f"{level}%" if level is not None else "--",
@@ -822,15 +917,78 @@ class NexusPanel:
             values[part+"_time"] = {"text": self.reading_times.label(key, reading, part), "fill": self.color(theme.MUTED)}
         return values
 
+    @staticmethod
+    def ring_state(reading, part=None):
+        """(level, charging) shown by a ring; earbuds use the lower of the two ears."""
+        if reading is None or reading.error:
+            return None, False
+        components = reading.components
+        if part == "case":
+            value = (components or {}).get("case") or {}
+            return value.get("level"), value.get("charging") is True
+        if components is not None:
+            ears = [components.get(name) or {} for name in ("left", "right")]
+            levels = [ear["level"] for ear in ears if ear.get("level") is not None]
+            return (min(levels) if levels else None), any(ear.get("charging") is True for ear in ears)
+        return (reading.level if reading.ok else None), reading.status in ("charging", "充电中")
+
+    @classmethod
+    def needs_charge(cls, reading, part=None):
+        level, charging = cls.ring_state(reading, part)
+        return level is not None and level <= LOW_LEVEL and not charging
+
+    def ios_styles(self, key, reading, summary, online):
+        """Texts and colours of the iOS widget ring and the grouped-list row."""
+        values = {}
+        for name, part in (("ring", None), ("ring_case", "case")):
+            level, _charging = self.ring_state(reading, part)
+            low = self.needs_charge(reading, part)
+            values[name + "_value"] = {
+                "text": f"{level}%" if level is not None else "--",
+                "fill": self.color(theme.LOW if low else theme.TEXT if level is not None else theme.MUTED)}
+        values["row_value"] = dict(values["ring_value"])
+        if reading.components and component_charging_text(reading.components) and not reading.error:
+            summary = component_charging_text(reading.components)
+        low = self.needs_charge(reading)
+        if low and online:
+            summary = "电量低"
+        when = self.reading_times.ago(key, reading)
+        values["row_sub"] = {"text": " · ".join(part for part in (summary, when) if part),
+                             "fill": self.color(theme.DANGER if low and online else theme.MUTED)}
+        return values
+
     def header_styles(self):
-        if not self.device_entries():
-            return {"badge_bg": {"fill": self.color(OFFLINE_BADGE)}, "dot": {"fill": self.color(theme.MUTED)},
-                    "badge": {"text": "暂无设备", "fill": self.color(theme.MUTED)}}
-        count = sum(reading.ok or reading.connected is True for reading in self.readings.values())
-        online, label = count > 0, f"{count}/{len(self.device_entries())} 在线"
-        return {"badge_bg": {"fill": self.color(theme.ONLINE_SURFACE if online else OFFLINE_BADGE)},
-                "dot": {"fill": self.color(theme.HEALTHY if online else theme.MUTED)},
-                "badge": {"text": label, "fill": self.color(theme.HEALTHY if online else theme.MUTED)}}
+        entries = self.device_entries()
+        readings = [self.readings.get(key) for key, _device in entries]
+        count = sum(reading.ok or reading.connected is True for reading in readings if reading is not None)
+        low = sum(self.needs_charge(reading) for reading in readings if reading is not None)
+        if not entries:
+            label = "还没有添加设备"
+        elif low:
+            label = f"{low} 台需要充电"
+        else:
+            label = f"{count}/{len(entries)} 在线"
+        refreshed = getattr(self, "last_refresh_at", None)
+        when = ""
+        if entries and refreshed:
+            from reading_ui import relative_time
+            age = relative_time(refreshed)
+            when = " · " + age + ("更新" if age == "刚刚" else " 更新")
+        # iOS colours only the warning; the refresh time stays secondary grey.
+        return {"summary": {"text": label, "fill": self.color(theme.DANGER if low else theme.MUTED)},
+                "summary_time": {"text": when, "fill": self.color(theme.MUTED)}}
+
+    def align_header_time(self):
+        """Keep the grey refresh time right after the (variable-width) summary."""
+        summary = self.live.bindings.get(("header", "summary"))
+        when = self.live.bindings.get(("header", "summary_time"))
+        if summary is None or when is None:
+            return
+        canvas, (summary_item,), _ = summary
+        _canvas, (when_item,), _ = when
+        bounds, position = canvas.bbox(summary_item), canvas.coords(when_item)
+        if bounds and position and abs(position[0] - bounds[2]) > .5:
+            canvas.coords(when_item, bounds[2], position[1])
 
     def refresh_readings(self):
         if not getattr(self, "live", None) or not self.live.bindings:
@@ -840,36 +998,39 @@ class NexusPanel:
             self.reading_times.observe(key, reading)
         if self.transition.active:
             return
-        header = self.header_styles()
-        header["badge_bg"] = self.badge_style(header["badge_bg"]["fill"], HEADER_BADGE_HEIGHT)
-        self.live.apply("header", header)
+        if self.live.apply("header", self.header_styles()):
+            self.align_header_time()
+        sheet = getattr(self, "device_sheet", None)
+        if sheet is not None:
+            sheet.refresh()
         for key in self.visible_devices:
             reading = self.readings.get(key)
             if reading is None:
                 continue
             values = self.reading_styles(key, reading)
-            values["badge_bg"] = self.badge_style(values["badge_bg"]["fill"], DEVICE_BADGE_HEIGHT)
             for part in (None, "left", "right", "case"):
-                name = part+"_battery" if part else "battery"
+                name = f"{part}_battery" if part is not None else "battery"
                 binding = self.live.bindings.get((key, name))
-                if binding is None:
-                    continue
-                canvas = binding[0]
-                if part:
-                    value = ((reading.components or {}).get(part) or {}) if not reading.error else {}
-                    level, charging = value.get("level"), value.get("charging") is True
-                else:
-                    level = reading.level if not reading.error else None
-                    charging = not reading.error and reading.status in ("charging", "充电中")
-                source = battery_photo(canvas, level, charging)
-                values[name] = {"image": str(self.ui.image(str(source)))}
-                gauge = getattr(self, "battery_gauges", {}).get((key, part))
-                if gauge is not None:
-                    self.update_battery_gauge(gauge, level, charging)
+                if binding is not None:
+                    photo = self.card_battery_photo(binding[0], reading, part)
+                    values[name] = {"image": str(self.ui.image(str(photo)))}
+            for name, part in (("ring", None), ("ring_case", "case")):
+                if (key, name) in self.live.bindings:
+                    values[name] = {"image": str(self.ring_photo(reading, part)[1])}
             self.live.apply(key, values)
-        self.update_runtime_display()
+
+    def natural_height(self):
+        """Logical window height the overview needs, without a details sheet."""
+        entries = self.device_entries()
+        rings = list(self.ring_entries(entries))
+        return IOS_HEADER + ios_layout(0, len(rings), len(entries), note=self.earbud_note(rings))["height"] + IOS_BOTTOM
+
+    def apply_sheet_height(self):
+        """Grow (or restore) the window for a details sheet without rebuilding the overview."""
+        self.resize_to_content(max(self.natural_height(), getattr(self, "sheet_min_height", 0)))
 
     def draw(self):
+        self.draw_count = getattr(self, "draw_count", 0) + 1
         if self.transition.phase == "prepare":
             self.transition.start()
             return
@@ -880,68 +1041,81 @@ class NexusPanel:
         if not self.canvas.winfo_exists() or self.transition.phase == "out":
             return
         entries = self.device_entries()
-        top = OVERVIEW_TOP
-        body_height = content_height(len(entries))
-        self.resize_to_content(top + body_height + FOOTER_HEIGHT)
+        rings = list(self.ring_entries(entries))
+        top = IOS_HEADER
+        body_height = ios_layout(0, len(rings), len(entries), note=self.earbud_note(rings))["height"]
+        self.resize_to_content(max(top + body_height + IOS_BOTTOM, getattr(self, "sheet_min_height", 0)))
         w, h = (self.ui.logical(value) for value in self._layout_size)
-        viewport = h - top - FOOTER_HEIGHT
+        viewport = h - top - IOS_BOTTOM
         self.transition.begin_layout()
         self.live.bindings.clear()
-        self.battery_gauges = {}
         self.visible_devices = {}
+        self.row_hits = []
+        self.card_hover.suspend()  # iOS rows do not lift; clicks use row_hits
         self.reading_times.retain(set(self.readings))
         for key, reading in self.readings.items():
             self.reading_times.observe(key, reading)
             yield
         self.display_photos = []
-        self.overview_runtime_items.clear()
         self.canvas.delete("all")
         self.overview_canvas.delete("all")
+        self.glass_items, self.glass_buttons, self._glass_pending = [], [], []
+        self._glass_ready = bool(getattr(self, "glass_enabled", False)) and self.glass.prepare()
         yield
 
         canvas = self.canvas
-        canvas.create_rectangle(0, 0, w, h, fill=self.color(theme.BACKGROUND), outline="")
-        canvas.create_image(0, 0, image=self.chrome_image("ambient-header.png"), anchor="nw")
-        canvas.create_image(17, 15, image=self.chrome_image("nexus-chrome.png"), anchor="nw")
-        canvas.create_text(79, 30, text="Nexus", anchor="w", fill=self.color(theme.TEXT),
-                           font=("Segoe UI", 21, "bold"))
-        canvas.create_text(80, 52, text="外设电量中心", anchor="w", fill=self.color(theme.MUTED), font=(FONT, 10))
-        canvas.create_text(w - 271, 39, text="主题", anchor="e", fill=self.color(theme.MUTED), font=(FONT, 10))
-        self.ui.place(self.theme_picker, x=w - 259, y=20)
-        yield
-
-        rounded_rect(canvas, 16, 71, w - 16, 118, 16, self.color(theme.SURFACE),
-                     outline=self.color(theme.LINE), tags="view_toolbar")
-        canvas.create_text(32, 94, text="设备总览", anchor="w", fill=self.color(theme.TEXT),
-                           font=(FONT, 13, "bold"))
-        self.ui.place(self.receiver_button, x=w - 231, y=77)
-        self.ui.place(self.refresh_button, x=w - 124, y=74, width=104, height=42)
+        background = self.color(theme.BACKGROUND)
+        canvas.configure(bg=background)
+        self.overview_canvas.configure(bg=background)
+        # iOS large title with a one-line summary; round buttons on the right.
+        canvas.create_text(20, 60, text="设备", anchor="w", fill=self.color(theme.TEXT),
+                           font=(theme.FONT, 26, "bold"))
         header = self.header_styles()
-        status_x = w - 103
-        self.live_badge(canvas, "header", status_x + BADGE_WIDTH/2, 39,
-                        HEADER_BADGE_HEIGHT, header["badge_bg"]["fill"])
-        dot = canvas.create_oval(status_x + 10, 36, status_x + 16, 42, outline="", **header["dot"])
-        self.live.link("header", "dot", canvas, (dot,), **header["dot"])
-        self.live_text(canvas, "header", "badge", status_x + 22, 39,
-                       anchor="w", font=(FONT, 9, "bold"), **header["badge"])
+        self.live_text(canvas, "header", "summary", 21, 96, anchor="w", font=(theme.FONT, 11),
+                       **header["summary"])
+        self.live_text(canvas, "header", "summary_time", 21, 96, anchor="w", font=(theme.FONT, 11),
+                       **header["summary_time"])
+        self.theme_picker.place_forget()  # theme now lives in 设置 › 外观
+        for button in (self.receiver_button, self.settings_button, self.refresh_button):
+            button.configure(bg=background)
+        # Buttons sit on the large-title line, as in iOS.
+        self.ui.place(self.settings_button, x=w - IOS_MARGIN - 34, y=43)
+        self.ui.place(self.receiver_button, x=w - IOS_MARGIN - 76, y=43)
+        self.ui.place(self.refresh_button, x=w - IOS_MARGIN - 76 - 106, y=39, width=104, height=42)
+        for button in (self.receiver_button, self.settings_button, self.refresh_button):
+            button.set_backdrop(None)
         yield
         self.ui.place(self.overview_canvas, x=0, y=top, width=w, height=viewport)
         self.set_content_scroll(w, top, viewport, body_height, "empty" if not entries else "overview")
-        self.draw_footer(w, h)
         yield from self.ui.canvas_steps(canvas)
+        self.align_header_time()  # after scaling: both items are in screen pixels
+        if self.glass_on():
+            self.add_glass(canvas, 0, 0, self.ui.px(w), self.ui.px(h), "base")
+            places = ((self.settings_button, w - IOS_MARGIN - 34, 43, 34, 34),
+                      (self.receiver_button, w - IOS_MARGIN - 76, 43, 34, 34),
+                      (self.refresh_button, w - IOS_MARGIN - 76 - 106, 39, 104, 42))
+            for button, x, y, bw, bh in places:
+                photo = self.glass_photo(self.root.winfo_rootx() + self.ui.px(x), self.root.winfo_rooty() + self.ui.px(y),
+                                         self.ui.px(bw), self.ui.px(bh), "base")
+                button.set_backdrop(photo)
+                self.glass_buttons.append(button)
+            if self.glass.average:
+                for target in (canvas, self.overview_canvas):
+                    target.configure(bg=self.glass.average)
+                self.transition.set_background(self.glass.average)
         yield
 
         body = self.overview_canvas
         if not entries:
-            self.card_hover.suspend()
-            draw_card_surface(body, CARD_MARGIN, CARD_PADDING, w - CARD_MARGIN, body_height - CARD_PADDING)
-            body.create_text(w/2, body_height/2 - 15, text="还没有加入设备",
-                             fill=self.color(theme.TEXT), font=(FONT, 18, "bold"))
-            body.create_text(w/2, body_height/2 + 18, text="点击上方「搜索设备」添加外设",
-                             fill=self.color(theme.MUTED), font=(FONT, 11))
+            self.surface(body, (IOS_MARGIN, 4, w - IOS_MARGIN, body_height - 12), 12)
+            body.create_text(w/2, body_height/2 - 15, text="还没有添加设备",
+                             fill=self.color(theme.TEXT), font=(theme.FONT, 16, "bold"))
+            body.create_text(w/2, body_height/2 + 16, text="点右上角的「+」添加键盘、鼠标或耳机",
+                             fill=self.color(theme.MUTED), font=(theme.FONT, 10))
             yield from self.ui.canvas_steps(body)
+            self.place_glass_cards(body, w, viewport)
             return
-        yield from self.draw_overview_steps(w, viewport, entries)
+        yield from self.draw_overview_steps(w, viewport, entries, rings)
 
     def set_content_scroll(self, width, top, viewport, content, mode):
         canvas = self.overview_canvas
@@ -960,16 +1134,10 @@ class NexusPanel:
         self._content_mode = mode
 
     def draw_footer(self, w, h):
-        from update_client import current_version
-        y = h - FOOTER_HEIGHT / 2
-        self.canvas.create_text(20, y, text=f"Nexus · {current_version()}", anchor="w",
-                                fill=self.color(theme.MUTED), font=(FONT, 10))
-        self.ui.place(self.settings_button, x=w-86, y=y-14)
+        """The iOS layout has no footer; the version is shown in 设置 › 软件更新."""
 
     def draw_product(self, canvas, device, x, y, width, height):
         kind = product_kind(device)
-        halo = "keyboard" if kind == "keyboard" else "mouse" if kind == "mouse" else "audio"
-        canvas.create_image(x, y, image=self.chrome_image(f"device-halo-{halo}.png"))
         photo = self.fitted_product(product_image_kind(device), width, height)
         if photo is not None:
             canvas.create_image(x, y, image=photo, tags="product_photo")
@@ -979,76 +1147,24 @@ class NexusPanel:
             keyboard_width = min(width, height * 2.7)
             draw_keyboard(canvas, x - keyboard_width/2, y - height*.28, keyboard_width, height*.56)
         else:
-            rounded_rect(canvas, x - 20, y - 24, x + 20, y + 24, 11,
-                         self.color(theme.Color("#e5e8ed", "#424d67")))
-            canvas.create_text(x, y, text="USB", fill=self.color(theme.MUTED), font=(FONT, 11, "bold"))
-
-    def draw_card_name(self, canvas, device, key, styles, rect, *, info_right=None):
-        x1, y1, x2, _ = rect
-        badge_right = x2 - 19 if info_right is None else info_right
-        maker, model = (device.manufacturer, device.model) if device else ("AULA", "F87 Pro")
-        if is_bluetooth(device) and maker == "未提供":
-            maker = "Beats" if product_kind(device) == "beats-studio-buds" else "Bluetooth"
-        title_font = ("Segoe UI", 18, "bold")
-        maker_width = badge_right - x1 - 115
-        title_width = x2 - x1 - 134 if info_right is None else info_right - x1 - 20
-        canvas.create_text(x1 + 20, y1 + 23, anchor="w", font=(FONT, 10), fill=self.color(theme.MUTED),
-                           text=clipped_label(canvas, maker, (FONT, 10), maker_width))
-        canvas.create_text(x1 + 20, y1 + 51, anchor="w", font=title_font, fill=self.color(theme.TEXT),
-                           text=clipped_label(canvas, model, title_font, title_width))
-        badge_y = y1 + (31 if info_right is None else 24)
-        badge_center = badge_right - BADGE_WIDTH/2
-        self.live_badge(canvas, key, badge_center, badge_y, DEVICE_BADGE_HEIGHT, styles["badge_bg"]["fill"])
-        self.live_text(canvas, key, "badge", badge_center, badge_y, font=(FONT, 9, "bold"), **styles["badge"])
+            rounded_rect(canvas, x - 20, y - 24, x + 20, y + 24, 11, self.color(theme.SOFT))
+            canvas.create_text(x, y, text="USB", fill=self.color(theme.MUTED), font=(theme.FONT, 11, "bold"))
 
     def draw_card_battery(self, canvas, key, reading, styles, x, y, width, *, component_layout):
         if component_layout:
-            for index, (part, label) in enumerate((("left", "左耳"), ("right", "右耳"), ("case", "充电仓"))):
-                px = x + index * (width / 3)
-                value = ((reading.components or {}).get(part) or {}) if not reading.error else {}
-                canvas.create_text(px, y, text=label, anchor="w", fill=self.color(theme.MUTED), font=(FONT, 9))
-                self.live_battery(canvas, key, part + "_battery", px, y + 16,
-                                  value.get("level"), value.get("charging") is True)
-                self.live_text(canvas, key, part + "_level", px + 38, y + 24, anchor="w",
-                               font=("Segoe UI", 13, "bold"), **styles[part + "_level"])
-                self.live_text(canvas, key, part + "_time", px, y + 45, anchor="w",
-                               font=(FONT, 8), **styles[part + "_time"])
-                self.draw_battery_gauge(canvas, key, part, px, y + 55, width / 3 - 12,
-                                        value.get("level"), value.get("charging") is True)
+            column_width = min(width, 318) / len(BATTERY_PARTS)
+            value_y = y + 15
+            for index, (part, label) in enumerate(BATTERY_PARTS):
+                px = x + index * column_width
+                canvas.create_text(px, y - 12, text=label, anchor="w",
+                                   fill=self.color(theme.MUTED), font=(theme.FONT, 10))
+                self.live_battery(canvas, key, reading, part, px, value_y)
+                self.live_text(canvas, key, part + "_level", px + COMPONENT_BATTERY_ICON_WIDTH + 5, value_y, anchor="w",
+                               font=(theme.FONT, -17, "bold"), **styles[part + "_level"])
         else:
-            canvas.create_text(x, y, text="剩余电量", anchor="w", fill=self.color(theme.MUTED), font=(FONT, 10))
-            charging = not reading.error and reading.status in ("charging", "充电中")
-            self.live_battery(canvas, key, "battery", x, y + 17, reading.level if not reading.error else None, charging)
-            self.live_text(canvas, key, "level", x + 45, y + 24, anchor="w",
-                           font=("Segoe UI", 26, "bold"), **styles["level"])
-            self.draw_battery_gauge(canvas, key, None, x, y+47, min(width, 185),
-                                    reading.level if not reading.error else None, charging)
-
-    def battery_tone(self, level, charging):
-        role = theme.ACCENT if charging else theme.DANGER if level < 20 else theme.WARNING if level < 40 else theme.HEALTHY
-        return self.color(role)
-
-    def draw_battery_gauge(self, canvas, key, part, x, y, width, level, charging):
-        canvas.create_line(x, y, x+width, y, fill=self.color(theme.LINE), width=3, capstyle="round")
-        span = width * (level or 0) / 100
-        fill = self.battery_tone(level or 0, charging)
-        item = canvas.create_line(x, y, x+span, y, fill=fill, width=3, capstyle="round",
-                                  state="normal" if level else "hidden")
-        self.battery_gauges[key, part] = canvas, item, width
-
-    def update_battery_gauge(self, gauge, level, charging):
-        canvas, item, width = gauge
-        x, y, old_end, _ = canvas.coords(item)
-        fill = self.battery_tone(level or 0, charging)
-        end = x + self.ui.px(width * (level or 0) / 100)
-        if abs(old_end - end) >= 1:
-            canvas.coords(item, x, y, end, y)
-        state = "normal" if level else "hidden"
-        if canvas.itemcget(item, "state") != state:
-            canvas.itemconfigure(item, state=state)
-        if canvas.itemcget(item, "fill") != fill:
-            canvas.itemconfigure(item, fill=fill)
-            self.transition.update_style(canvas, item, fill=fill)
+            self.live_battery(canvas, key, reading, None, x, y)
+            self.live_text(canvas, key, "level", x+42, y, anchor="w",
+                           font=(theme.FONT, 29, "bold"), **styles["level"])
 
     def fitted_product(self, kind, max_width, max_height, clockwise=False):
         import tkinter as tk
@@ -1101,65 +1217,149 @@ class NexusPanel:
         self.display_photos.append(photo)
         return photo
 
-    def draw_overview_steps(self, width, viewport_height, entries):
+    # ---- iOS artwork helpers -------------------------------------------------
+    def physical_image(self, key, logical_width, logical_height, render):
+        """A blank logical-size placeholder mapped to artwork rendered at screen pixels."""
+        import tkinter as tk
+
+        cache = self.__dict__.setdefault("_ios_images", {})
+        if key not in cache:
+            physical = tk.PhotoImage(master=self.root, data=render(), format="PNG")
+            logical = tk.PhotoImage(master=self.root, width=max(1, round(logical_width)),
+                                    height=max(1, round(logical_height)))
+            self.ui.images[str(logical)] = physical
+            cache[key] = logical, physical
+            while len(cache) > 400:
+                old_logical, _old = cache.pop(next(iter(cache)))
+                self.ui.images.pop(str(old_logical), None)
+        return cache[key]
+
+    def surface(self, canvas, rect, radius, swatch=theme.SURFACE):
+        if swatch is theme.SURFACE and canvas is self.overview_canvas and self.glass_on():
+            self._glass_pending.append((rect, radius))   # placed by place_glass_cards()
+            return None
+        x1, y1, x2, y2 = rect
+        width, height = self.ui.px(x2) - self.ui.px(x1), self.ui.px(y2) - self.ui.px(y1)
+        corner, fill = self.ui.px(radius), self.color(swatch)
+        logical, _physical = self.physical_image(
+            ("surface", width, height, corner, fill), x2 - x1, y2 - y1,
+            lambda: rounded_surface_png(width, height, corner, fill))
+        return canvas.create_image(x1, y1, image=logical, anchor="nw", tags=("shape", "surface"))
+
+    def place_glass_cards(self, canvas, width, viewport_height):
+        """Frosted cards (and the list's own backdrop) at screen pixels, below every other item."""
+        pending, self._glass_pending = self._glass_pending, []
+        if not self.glass_on():
+            return
+        factor = self.ui.factor
+        for (x1, y1, x2, y2), radius in pending:
+            left, top = round(x1 * factor), round(y1 * factor)
+            self.add_glass(canvas, left, top, round(x2 * factor) - left, round(y2 * factor) - top,
+                           "card", self.ui.px(radius))
+        self.add_glass(canvas, 0, canvas.canvasy(0), self.ui.px(width), self.ui.px(viewport_height), "base")
+
+    def ring_photo(self, reading, part=None):
+        level, charging = self.ring_state(reading, part)
+        low = self.needs_charge(reading, part)
+        progress = self.color(theme.LOW if low else theme.RING)
+        track = self.color(theme.RING_TRACK)
+        badge = (self.color(theme.SURFACE), self.color(theme.RING), "#ffffff") if charging else None
+        size, stroke = self.ui.px(IOS_RING), max(3, self.ui.px(7))
+        level = None if level is None else int(level)
+        return self.physical_image(("ring", size, stroke, level, progress, track, badge), IOS_RING, IOS_RING,
+                                   lambda: ring_png(size, stroke, level, progress, track, badge))
+
+    @staticmethod
+    def ring_entries(entries):
+        """(device key, device, part, label, glyph) for each ring in the battery widget.
+
+        Rings are labelled by kind (键盘 / 鼠标 / 耳机) like the iOS widget; when two
+        devices share a kind, or the kind is unknown, the model name is used instead.
+        """
+        kinds = [product_kind(device) for _key, device in entries]
+        for (key, device), kind in zip(entries, kinds):
+            model = device.model if device else "F87 Pro"
+            label = RING_KINDS[kind] if kind in RING_KINDS and kinds.count(kind) == 1 else model
+            if kind == "beats-studio-buds":
+                yield key, device, None, label, "headphones"
+                yield key, device, "case", "充电仓", "case"
+            else:
+                glyph = {"keyboard": "keyboard", "mouse": "mouse"}.get(kind)
+                yield key, device, None, label, glyph or ("bluetooth" if is_bluetooth(device) else "usb")
+
+    @staticmethod
+    def earbud_note(rings):
+        return any(ring[2] == "case" for ring in rings)
+
+    def draw_thumbnail(self, canvas, device, x, y):
+        photo = self.fitted_product(product_image_kind(device), 40, 36)
+        if photo is not None:
+            canvas.create_image(x, y, image=photo, tags="product_photo")
+            return
+        text, family = theme.glyph(canvas, "bluetooth" if is_bluetooth(device) else "usb")
+        canvas.create_text(x, y, text=text, fill=self.color(theme.ACCENT), font=(family, 14))
+
+    def row_hit(self, x, y):
+        return next((key for key, (x1, y1, x2, y2) in getattr(self, "row_hits", ())
+                     if x1 <= x <= x2 and y1 <= y <= y2), None)
+
+    def draw_overview_steps(self, width, viewport_height, entries, rings=None):
+        """iOS Batteries widget on top, grouped device list below."""
         canvas = self.overview_canvas
-        hover_cards = []
-        motion_items = set()
-        for (key, device), rect in zip(entries, card_rectangles(width, len(entries))):
-            x1, y1, x2, y2 = rect
-            art_width = min(274, (x2 - x1) * .39)
-            art_right = x2 - 14
-            art_left = art_right - art_width
-            art_top, art_bottom = y1 + 12, y2 - 43
-            info_right = art_left - 14
+        rings = list(self.ring_entries(entries)) if rings is None else rings
+        layout = ios_layout(width, len(rings), len(entries), note=self.earbud_note(rings))
+        text, muted = self.color(theme.TEXT), self.color(theme.MUTED)
+        column = (layout["widget"][2] - layout["widget"][0] - 20) / IOS_RING_COLUMNS
+        self.surface(canvas, layout["widget"], 20)
+        for (key, device, part, label, glyph_name), (cx, ring_top) in zip(rings, layout["rings"]):
+            reading = self.readings.get(key, Reading(device.label if device else KEYBOARD_TITLE, "正在读取…"))
+            styles = self.reading_styles(key, reading)
+            name = "ring_case" if part == "case" else "ring"
+            logical, physical = self.ring_photo(reading, part)
+            item = canvas.create_image(cx, ring_top + IOS_RING / 2, image=logical, tags="ring")
+            self.live.link(key, name, canvas, (item,), image=str(physical))
+            glyph, family = theme.glyph(canvas, glyph_name)
+            canvas.create_text(cx, ring_top + IOS_RING / 2, text=glyph, fill=text, font=(family, 17))
+            self.live_text(canvas, key, name + "_value", cx, ring_top + IOS_RING + 22,
+                           font=(theme.NUM_FONT, 15), **styles[name + "_value"])
+            label_font = (theme.FONT, 10)
+            canvas.create_text(cx, ring_top + IOS_RING + 46, fill=muted, font=label_font,
+                               text=clipped_label(canvas, label, label_font, column - 10))
+            self.row_hits.append((key, (cx - column / 2, ring_top, cx + column / 2, ring_top + IOS_RING_ROW)))
+            yield
+        canvas.create_text(IOS_MARGIN + 16, layout["section_y"], text="我的设备", anchor="w",
+                           fill=muted, font=(theme.FONT, 10))
+        self.surface(canvas, layout["group"], 12)
+        chevron, chevron_family = theme.glyph(canvas, "chevron")
+        for index, ((key, device), (x1, y1, x2, y2)) in enumerate(zip(entries, layout["rows"])):
             self.visible_devices[key] = device
             reading = self.readings.get(key, Reading(device.label if device else KEYBOARD_TITLE, "正在读取…"))
             styles = self.reading_styles(key, reading)
-            previous = set(canvas.find_all())
-            surface = draw_card_surface(canvas, x1, y1, x2, y2)
-            self.draw_card_name(canvas, device, key, styles, rect, info_right=info_right)
+            middle = (y1 + y2) / 2
+            if index:
+                canvas.create_line(x1 + 70, y1, x2, y1, fill=self.color(theme.LINE), width=1)
+            self.surface(canvas, (x1 + 14, middle - 22, x1 + 58, middle + 22), 10, theme.SOFT)
+            self.draw_thumbnail(canvas, device, x1 + 36, middle)
+            title_font = (theme.FONT, 13)
+            model = device.model if device else "AULA F87 Pro"
+            canvas.create_text(x1 + 70, middle - 11, anchor="w", fill=text, font=title_font,
+                               text=clipped_label(canvas, model, title_font, x2 - x1 - 150))
+            self.live_text(canvas, key, "row_sub", x1 + 70, middle + 13, anchor="w",
+                           font=(theme.FONT, 10), **styles["row_sub"])
+            self.live_text(canvas, key, "row_value", x2 - 32, middle, anchor="e",
+                           font=(theme.NUM_FONT, 13), **styles["row_value"])
+            canvas.create_text(x2 - 14, middle, anchor="e", text=chevron, fill=self.color(theme.CHEVRON),
+                               font=(chevron_family, 10))
+            self.row_hits.append((key, (x1, y1, x2, y2)))
             yield
-            x = x1 + 20
-            component_layout = product_kind(device) == "beats-studio-buds"
-            meter_width = info_right - x
-            self.draw_card_battery(canvas, key, reading, styles, x, y1 + 81, meter_width,
-                                   component_layout=component_layout)
-            if not component_layout:
-                self.live_text(canvas, key, "state", x, y1+147, anchor="w",
-                               font=(FONT, 9), **styles["state"])
-            yield
-            if theme.is_dark(canvas):
-                draw_card_surface(canvas, art_left, art_top, art_right, art_bottom, product=True)
-            else:
-                rounded_rect(canvas, art_left, art_top, art_right, art_bottom, 17, "#f3eff7")
-            self.draw_product(canvas, device, (art_left+art_right)/2, (art_top+art_bottom)/2,
-                              art_width - 22, art_bottom - art_top - 10)
-            caption_x = x if component_layout else x + 110
-            self.live_text(canvas, key, "caption", caption_x, y1 + 149, anchor="w",
-                           font=(FONT, 9), **styles["caption"])
-            yield
-            canvas.create_line(x, y2 - 36, x2 - 20, y2 - 36, fill=self.color(theme.LINE))
-            self.live_text(canvas, key, "timestamp", x, y2 - 18, anchor="w",
-                           font=(FONT, 9), **styles["timestamp"])
-            canvas.create_text(x1 + (x2-x1)*.43, y2 - 18, text=connection_text(device),
-                               fill=self.color(theme.MUTED), font=(FONT, 9))
-            if key == DEFAULT_DEVICE_ID:
-                self.overview_runtime_items[key] = self.live_text(
-                    canvas, key, "runtime", x2 - 100, y2 - 18, anchor="e", font=(FONT, 9), **styles["runtime"])
-            else:
-                self.live_text(canvas, key, "power", x2 - 100, y2 - 18, anchor="e",
-                               font=(FONT, 9), **styles["power"])
-            canvas.create_text(x2 - 20, y2 - 18, text="设备操作 ⋯", anchor="e",
-                               fill=self.color(theme.ACCENT), font=(FONT, 9, "bold"))
-            items = set(canvas.find_all()) - previous
-            motion_items.update(items - {surface})
-            hover_cards.append((key, rect, items, surface))
-            yield
-        self.update_runtime_display()
+        if layout["note_y"] is not None:
+            canvas.create_text(IOS_MARGIN + 16, layout["note_y"], text=EARBUD_NOTE, anchor="w",
+                               fill=muted, font=(theme.FONT, 9))
         yield from self.ui.canvas_steps(canvas)
+        self.place_glass_cards(canvas, width, viewport_height)
+        motion_items = set(canvas.find_all()) - set(canvas.find_withtag("surface"))
         self.transition.register(canvas, motion_items,
                                  region=(0, 0, self.ui.px(width), self.ui.px(viewport_height)))
-        self.card_hover.register(hover_cards)
 
     def resize_to_content(self, wanted_height):
         root = self.root
@@ -1206,6 +1406,10 @@ class NexusPanel:
 
     def redraw_after_resize(self):
         self._geometry_after_id = None
+        sheet = getattr(self, "device_sheet", None)
+        if getattr(sheet, "animating", False):
+            self._geometry_after_id = self.root.after(120, self.redraw_after_resize)
+            return
         self.transition.cancel()
         self.card_hover.reset_assets()
         self.draw()
@@ -1221,6 +1425,7 @@ class NexusPanel:
         y = max(top, bottom - height - frame_height - WINDOW_MARGIN)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
         self._positioned = True
+        self.schedule_glass(60)  # the first draw sampled the glass before the window was placed
 
     def reveal_transition(self):
         canvases = self.canvas, self.overview_canvas
@@ -1243,8 +1448,12 @@ class NexusPanel:
             return
         x = self.ui.logical(self.overview_canvas.canvasx(event.x))
         y = self.ui.logical(self.overview_canvas.canvasy(event.y))
-        device_id = self.card_hover.hit(x, y)
+        device_id = self.row_hit(x, y)
         if device_id is None:
+            return
+        if getattr(event, "num", 1) == 1:
+            # iOS: tapping a row opens its details; the menu stays on right click.
+            self.show_device_information(device_id)
             return
         self.device_menu.delete(0, "end")
         self.device_menu.add_command(label="查看设备信息", command=lambda: self.show_device_information(device_id))
@@ -1254,25 +1463,20 @@ class NexusPanel:
         finally:
             self.device_menu.grab_release()
 
-    def show_device_information(self, device_id):
-        from tkinter import messagebox
+    def overview_motion(self, event):
+        x = self.ui.logical(self.overview_canvas.canvasx(event.x))
+        y = self.ui.logical(self.overview_canvas.canvasy(event.y))
+        self.overview_canvas.configure(cursor="hand2" if self.row_hit(x, y) else "")
 
-        entries = dict(self.device_entries())
-        if device_id not in entries:
+    def show_device_information(self, device_id):
+        """iOS bottom sheet with the device's details (replaces the old message box)."""
+        if device_id not in dict(self.device_entries()):
             return
-        device = entries[device_id]
-        model = device.model if device else "AULA F87 Pro"
-        hardware = device.hardware_id if device else ""
-        reading = self.readings.get(device_id)
-        lines = [connection_text(device)]
-        if hardware:
-            lines.append(hardware)
-        if reading is not None:
-            styles = self.reading_styles(device_id, reading)
-            if reading.ok:
-                lines.append("电量 " + reading.display_level)
-            lines.extend((styles["status"]["text"], styles["power"]["text"], styles["detail"]["text"]))
-        messagebox.showinfo(model, "\n\n".join(lines), parent=self.root)
+        sheet = getattr(self, "device_sheet", None)
+        if sheet is not None:
+            sheet.close(redraw=False)
+        from device_sheet import DeviceSheet
+        self.device_sheet = DeviceSheet(self, device_id)
 
     def end_drag(self, _event):
         self._drag = None
