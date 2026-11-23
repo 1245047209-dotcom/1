@@ -357,14 +357,22 @@ def ui_instance():
         KERNEL32.CloseHandle(handle)
 
 
-def register_ui_window(window) -> None:
-    hwnd = USER32.GetAncestor(window.winfo_id(), 2)  # GA_ROOT: the Tk top-level wrapper
+def register_ui_handle(hwnd) -> None:
     if not hwnd or not USER32.SetPropW(hwnd, UI_INSTANCE_KEY, 1):
         raise ctypes.WinError(ctypes.get_last_error())
 
+
+def unregister_ui_handle(hwnd) -> None:
+    USER32.RemovePropW(hwnd, UI_INSTANCE_KEY)
+
+
+def register_ui_window(window) -> None:
+    hwnd = USER32.GetAncestor(window.winfo_id(), 2)  # GA_ROOT: the Tk top-level wrapper
+    register_ui_handle(hwnd)
+
     def unregister(event):
         if event.widget is window:
-            USER32.RemovePropW(hwnd, UI_INSTANCE_KEY)
+            unregister_ui_handle(hwnd)
 
     window.bind("<Destroy>", unregister, add="+")
 

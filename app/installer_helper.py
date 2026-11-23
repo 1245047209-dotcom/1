@@ -13,6 +13,7 @@ import win_shell
 
 BASE = Path(__file__).resolve().parent
 RUNTIME = os.path.normcase(str(BASE / "runtime" / "pythonw.exe"))
+FRONTEND = os.path.normcase(str(BASE / "native" / "NexusNative.exe"))
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -24,20 +25,26 @@ user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintyp
 user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, ctypes.c_size_t, ctypes.c_ssize_t]
 
 
-def owned_window(hwnd):
+def window_executable(hwnd):
     if not hwnd:
-        return False
+        return None
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     handle = kernel32.OpenProcess(0x1000, False, pid.value)
     if not handle:
-        return False
+        return None
     try:
         text = ctypes.create_unicode_buffer(32768)
         length = wintypes.DWORD(len(text))
-        return bool(kernel32.QueryFullProcessImageNameW(handle, 0, text, ctypes.byref(length)) and os.path.normcase(text.value) == RUNTIME)
+        if kernel32.QueryFullProcessImageNameW(handle, 0, text, ctypes.byref(length)):
+            return os.path.normcase(text.value)
+        return None
     finally:
         kernel32.CloseHandle(handle)
+
+
+def owned_window(hwnd):
+    return window_executable(hwnd) in (RUNTIME, FRONTEND)
 
 
 def shutdown():

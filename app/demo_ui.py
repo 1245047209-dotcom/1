@@ -156,12 +156,6 @@ def main():
                           f"$b.Save('{target}',[System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()")
                 subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], check=True)
         def check_glass():
-            if panel.native_glass:
-                assert not panel.glass_items and not panel.glass_buttons, "acrylic skips wallpaper crops"
-                assert panel.canvas.cget("background") == panel.acrylic.background_color
-                assert panel.overview_canvas.cget("background") == panel.acrylic.background_color
-                print("Tk smoke: 实时桌面亚克力已接入主窗口和设备列表")
-                return
             if not panel.glass_on():
                 print("Tk smoke: 未能读取桌面壁纸，毛玻璃已自动改用纯色背景：" + (panel.glass.error or "无壁纸"))
                 return
@@ -387,7 +381,7 @@ def main():
             dialog.pick_theme("dark")
             dialog.glass_switch.invoke()  # off
             dialog.done()
-            assert config["glass_backdrop"] is False and not panel.native_glass and not panel.glass_on() and not panel.glass_items
+            assert config["glass_backdrop"] is False and not panel.glass_on() and not panel.glass_items
             assert config["panel_auto_refresh"] is False and panel.auto is False
             panel.open_settings()
             assert panel.settings_window.auto.get() is False

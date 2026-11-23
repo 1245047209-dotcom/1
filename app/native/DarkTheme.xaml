@@ -1,0 +1,23 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <SolidColorBrush x:Key="ClientTintBrush" Color="#46101823"/>
+    <SolidColorBrush x:Key="BackdropFallbackBrush" Color="#151E29"/>
+    <SolidColorBrush x:Key="TextBrush" Color="#F7FAFF"/>
+    <SolidColorBrush x:Key="MutedTextBrush" Color="#DEE8F4"/>
+    <SolidColorBrush x:Key="WarningTextBrush" Color="#FFA7A3"/>
+    <SolidColorBrush x:Key="CardFillBrush" Color="#43121C28"/>
+    <SolidColorBrush x:Key="CardEdgeBrush" Color="#50C8DBF3"/>
+    <SolidColorBrush x:Key="RingTrackBrush" Color="#61DDE9F7"/>
+    <SolidColorBrush x:Key="HealthyRingBrush" Color="#50E477"/>
+    <SolidColorBrush x:Key="MediumRingBrush" Color="#FFC83F"/>
+    <SolidColorBrush x:Key="LowRingBrush" Color="#FF6968"/>
+    <SolidColorBrush x:Key="RingIconBrush" Color="#F3F8FF"/>
+    <SolidColorBrush x:Key="ChargeGlyphBrush" Color="#082819"/>
+    <SolidColorBrush x:Key="ArtworkFillBrush" Color="#59EDF4FF"/>
+    <SolidColorBrush x:Key="DividerBrush" Color="#33B2C6DE"/>
+    <SolidColorBrush x:Key="RefreshButtonFillBrush" Color="#F21460BE"/>
+    <SolidColorBrush x:Key="IconButtonFillBrush" Color="#9E24354A"/>
+    <SolidColorBrush x:Key="IconButtonTextBrush" Color="#D5E9FF"/>
+    <SolidColorBrush x:Key="RowHoverBrush" Color="#492B4B70"/>
+    <SolidColorBrush x:Key="FocusBrush" Color="#EBAED4FF"/>
+</ResourceDictionary>

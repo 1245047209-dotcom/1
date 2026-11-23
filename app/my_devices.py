@@ -408,10 +408,7 @@ class NexusPanel:
         self.receiver_button = IconButton(self.canvas, "add", self.open_receiver_search, ui=self.ui, label="添加设备")
         self.settings_button = IconButton(self.canvas, "settings", self.open_settings, ui=self.ui, label="设置")
         self.row_hits = []
-        from acrylic import Acrylic
         from glass import Backdrop
-        self.acrylic = Acrylic(root)
-        self.native_glass = False
         self.glass = Backdrop(root, self.ui.native)
         self.glass_enabled = bool(cfg.get("glass_backdrop", True))
         self.glass_items = []        # [(canvas, item, width px, height px, role, radius px)]
@@ -427,10 +424,6 @@ class NexusPanel:
                                            highlightthickness=0, yscrollincrement=self.ui.px(24))
         from ios_controls import ThinScrollbar
         self.overview_scrollbar = ThinScrollbar(self.canvas, self.overview_canvas.yview, p=self.ui.px)
-        self._acrylic_canvases_ready = all(self.acrylic.attach(widget) for widget in (
-            self.canvas, self.overview_canvas, self.overview_scrollbar,
-            self.receiver_button, self.settings_button, self.refresh_button,
-        ))
         self.overview_canvas.configure(yscrollcommand=self._overview_scrolled)
         self.overview_scrollable = False
         self._content_mode = None
@@ -455,7 +448,6 @@ class NexusPanel:
         root.resizable(True, False)
         root.bind("<Configure>", self.on_configure)
         root.bind("<Configure>", self.glass_moved, add="+")
-        root.bind("<Map>", self.glass_mapped, add="+")
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<F5>", self.refresh_shortcut)
         root.bind("<Control-r>", self.refresh_shortcut)
@@ -477,8 +469,6 @@ class NexusPanel:
         return average if self.glass_on() and average else self.color(theme.BACKGROUND)
 
     def overview_muted(self):
-        if getattr(self, "native_glass", False):
-            return self.color(theme.ACRYLIC_MUTED)
         return self.color(theme.GLASS_MUTED if self.glass_on() else theme.MUTED)
 
     # ---- frosted glass --------------------------------------------------------------
@@ -559,10 +549,6 @@ class NexusPanel:
     def glass_moved(self, event):
         if event.widget is self.root:
             self.schedule_glass()
-
-    def glass_mapped(self, event):
-        if event.widget is self.root and self.glass_enabled and not self.native_glass:
-            self.root.after_idle(self.draw)
 
     def _overview_scrolled(self, first, last):
         self.overview_scrollbar.set(first, last)
@@ -774,9 +760,6 @@ class NexusPanel:
                       self.runtime_after_id, getattr(self, "_geometry_after_id", None)):
             if timer is not None:
                 self.root.after_cancel(timer)
-        acrylic = getattr(self, "acrylic", None)
-        if acrylic is not None:
-            acrylic.close()
         self.root.destroy()
 
     def runtime_tick(self):
@@ -1108,25 +1091,14 @@ class NexusPanel:
         self.canvas.delete("all")
         self.overview_canvas.delete("all")
         self.glass_items, self.glass_buttons, self._glass_pending = [], [], []
-        glass_enabled = bool(getattr(self, "glass_enabled", False))
-        acrylic = getattr(self, "acrylic", None)
-        native_glass = acrylic is not None and acrylic.apply(
-            glass_enabled and self._acrylic_canvases_ready, theme.is_dark(self.root))
-        was_native = getattr(self, "native_glass", False)
-        if native_glass != was_native:
-            self.native_glass = self.root._nexus_acrylic = native_glass
-            theme.title_bar(self.root)
-        self._glass_ready = (glass_enabled and not native_glass
-                             and (acrylic is None or acrylic.wallpaper_allowed) and self.glass.prepare())
+        self._glass_ready = (bool(getattr(self, "glass_enabled", False))
+                             and not getattr(self.root, "_nexus_native_hwnd", 0) and self.glass.prepare())
         yield
 
         canvas = self.canvas
-        background = acrylic.background_color if native_glass else self.color(theme.BACKGROUND)
+        background = self.color(theme.BACKGROUND)
         canvas.configure(bg=background)
         self.overview_canvas.configure(bg=background)
-        if native_glass or was_native:
-            self.overview_scrollbar.configure(bg=background)
-            self.overview_scrollbar.redraw()
         # iOS large title with a one-line summary; round buttons on the right.
         canvas.create_text(20, 60, text="设备", anchor="w", fill=self.color(theme.TEXT),
                            font=(theme.FONT, 26, "bold"))
@@ -1301,8 +1273,6 @@ class NexusPanel:
         x1, y1, x2, y2 = rect
         width, height = self.ui.px(x2) - self.ui.px(x1), self.ui.px(y2) - self.ui.px(y1)
         corner, fill = self.ui.px(radius), self.color(swatch)
-        if swatch is theme.SURFACE and getattr(self, "native_glass", False):
-            fill = self.acrylic.surface_color
         logical, _physical = self.physical_image(
             ("surface", width, height, corner, fill, opacity), x2 - x1, y2 - y1,
             lambda: rounded_surface_png(width, height, corner, fill, opacity=opacity))
@@ -1400,8 +1370,7 @@ class NexusPanel:
         chevron, chevron_family = theme.glyph(canvas, "chevron")
         battery, battery_family = theme.glyph(canvas, "battery")
         wireless_icon = self.chrome_image("wireless-icon.png")
-        glass = getattr(self, "native_glass", False) or self.glass_on()
-        thumbnail_opacity = .07 if theme.is_dark(self.root) else .42 if glass else 1.0
+        thumbnail_opacity = .07 if theme.is_dark(self.root) else .42 if self.glass_on() else 1.0
         left, _, right, _ = layout["group"]
         metadata_width = 91 + min(28, max(0, width - MIN_WIDTH) / 4)
         power_x = right - 24 - metadata_width
@@ -1630,7 +1599,8 @@ class NexusPanel:
                 pass
         self.saved_devices, self.selected_device_id = self.device_store.load()
         self.device_changed()
-        self.root.lift()
+        if not getattr(self.root, "_nexus_native_hwnd", None):
+            self.root.lift()
         return created
 
     def remove_device(self, device_id):
@@ -1718,9 +1688,11 @@ def main(argv=None) -> None:
         panel = NexusPanel(root)
         panel.updates = UpdateManager(root, on_install=panel.close)
         panel.updates.start()
-        panel.place_initial_window()
-        root.deiconify()
-        tc.register_ui_window(root)
+        from native_panel import start_native_panel
+        if start_native_panel(panel) is None:
+            panel.place_initial_window()
+            root.deiconify()
+            tc.register_ui_window(root)
         if args.check_updates:
             root.after(50, panel.updates.open)
         root.mainloop()

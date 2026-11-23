@@ -24,7 +24,11 @@ FetchVerified $meta.base_installer $baseSetup
 FetchVerified $meta.compiler $compilerSetup
 RunSetup $baseSetup @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/NOICONS',('/DIR="'+$baseline+'"'),('/LOG="'+(Join-Path $buildRoot 'baseline.log')+'"'))
 RunSetup $compilerSetup @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/CURRENTUSER','/NOICONS','/TASKS=""',('/DIR="'+$compiler+'"'),('/LOG="'+(Join-Path $buildRoot 'compiler.log')+'"'))
-python (Join-Path $PSScriptRoot 'stage_payload.py') $repoRoot $baseline $payload
+$nativeBuilder = Join-Path $repoRoot 'app/native/Build-Frontend.ps1'
+$frontend = Join-Path $buildRoot 'NexusNative.exe'
+& $nativeBuilder -OutputPath $frontend -AssetsPath (Join-Path $baseline 'assets')
+if (-not (Test-Path -LiteralPath $frontend -PathType Leaf)) { throw 'Native main window build failed' }
+python (Join-Path $PSScriptRoot 'stage_payload.py') $repoRoot $baseline $payload $frontend
 if ($LASTEXITCODE -ne 0) { throw 'Payload staging failed' }
 $testRoot = Join-Path $buildRoot 'source-test'
 python -c 'import shutil,sys;shutil.copytree(sys.argv[1],sys.argv[2])' $payload $testRoot
@@ -68,6 +72,8 @@ python (Join-Path $PSScriptRoot 'check_release.py') $smokeRoot --installed
 if ($LASTEXITCODE -ne 0) { throw 'Installed payload verification failed' }
 & (Join-Path $smokeRoot 'runtime/python.exe') -X utf8 (Join-Path $smokeRoot 'my_devices.py') --help
 if ($LASTEXITCODE -ne 0) { throw 'Installed runtime entry failed' }
+python (Join-Path $PSScriptRoot 'check_native_main.py') $smokeRoot
+if ($LASTEXITCODE -ne 0) { throw 'Installed native main window startup check failed' }
 python (Join-Path $PSScriptRoot 'finalize_release.py') $payload $dist
 if ($LASTEXITCODE -ne 0) { throw 'Artifact/checksum preparation failed' }
 Write-Output "Verified source, GUI, runtime and upgrade preservation for $($meta.tag)."

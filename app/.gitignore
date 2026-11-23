@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 runtime/
 *.log
+*.tmp
 /added_devices.json
 /added_devices.lock
 /tray_config.json
@@ -13,3 +14,4 @@ runtime/
 /battery_*.json
 /low_battery_alert.json
 /low_battery_alert.lock
+/native/NexusNative.exe

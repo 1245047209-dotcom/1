@@ -5,7 +5,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 from interval_picker import IntervalPicker
-from search_window import bind_window_drag, match_owner_size
+from search_window import attach_dialog_owner, bind_window_drag, match_owner_size
 from toggle_switch import Switch, capsule_png, glass_capsule_png
 from ui_scale import UIScale
 import theme
@@ -349,7 +349,7 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
         super().__init__(panel.root)
         self.withdraw()
         self.title("Nexus · 设置")
-        self.transient(panel.root)
+        attach_dialog_owner(self, panel.root)
         self._nexus_ui = getattr(panel.root, "_nexus_ui", None) or UIScale(panel.root)
         self.scale = self._nexus_ui.factor
         self.protocol("WM_DELETE_WINDOW", self.cancel)
@@ -418,7 +418,9 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
         line = row(self, body, "自动", detail="跟随 Windows 的浅色 / 深色设置")
         self.auto_theme_switch = Switch(line, self.auto_theme, scale=self.scale, command=self._auto_theme_changed)
         self.auto_theme_switch.place(relx=1, rely=.5, anchor="e", x=-self.p(14))
-        line = row(self, body, "毛玻璃背景", detail="虚化主窗口后方的内容，取决于 Windows 支持")
+        glass_detail = ("主窗口实时虚化后方的内容" if getattr(panel.root, "_nexus_native_hwnd", 0)
+                        else "主窗口透出模糊的桌面壁纸")
+        line = row(self, body, "毛玻璃背景", detail=glass_detail)
         self.glass_switch = Switch(line, self.glass, scale=self.scale)
         self.glass_switch.place(relx=1, rely=.5, anchor="e", x=-self.p(14))
         # 刷新

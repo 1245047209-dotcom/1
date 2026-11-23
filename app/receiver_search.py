@@ -11,7 +11,7 @@ import theme
 from app_dialogs import DialogMetrics
 from bluetooth_devices import scan_bluetooth
 from receiver_scan import scan_receivers
-from search_window import bind_window_drag, match_owner_size
+from search_window import attach_dialog_owner, bind_window_drag, match_owner_size
 from toggle_switch import Switch
 from ui_scale import UIScale
 
@@ -82,7 +82,7 @@ class ReceiverSearch(DialogMetrics):
         win.title("Nexus · 添加设备")
         theme.style(win, bg=theme.BACKGROUND)
         theme.track_title_bar(win)
-        win.transient(parent)
+        attach_dialog_owner(win, parent)
         win.resizable(False, False)
         self.ui = getattr(parent, "_nexus_ui", None) or UIScale(parent)
         self.scale = self.ui.factor
