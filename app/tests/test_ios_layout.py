@@ -149,17 +149,48 @@ class PanelStateTests(unittest.TestCase):
         self.assertFalse(NexusPanel.needs_charge(Reading("Mouse", "", level=5, status="充电中")))
         self.assertFalse(NexusPanel.needs_charge(Reading("Mouse", "", error="timeout")))
 
+    def test_mid_range_colors_the_ring_without_changing_percentage_text(self):
+        import theme
+        self.assertEqual(theme.BATTERY_YELLOW, theme.Color("#ffd60a", "#ffd60a"))
+        panel = self.panel()
+        panel.ui = SimpleNamespace(px=lambda value: value)
+        panel.physical_image = lambda key, _width, _height, _render: key
+        cases = (
+            (20, "", theme.LOW, theme.LOW),
+            (21, "", theme.BATTERY_YELLOW, theme.TEXT),
+            (58, "", theme.BATTERY_YELLOW, theme.TEXT),
+            (60, "", theme.BATTERY_YELLOW, theme.TEXT),
+            (61, "", theme.RING, theme.TEXT),
+            (42, "充电中", theme.RING, theme.TEXT),
+            (None, "", theme.RING, theme.MUTED),
+        )
+        for mode in ("light", "dark"):
+            panel.color = lambda swatch: getattr(swatch, mode)
+            for level, status, ring_color, number_color in cases:
+                with self.subTest(mode=mode, level=level, status=status):
+                    reading = Reading("Mouse", "", level=level, status=status)
+                    styles = panel.reading_styles("mouse", reading)
+                    self.assertEqual(styles["ring_value"]["fill"], getattr(number_color, mode))
+                    ring = panel.ring_photo(reading)
+                    self.assertEqual(ring[4], getattr(ring_color, mode))
+                    self.assertEqual(ring[6] is not None, status == "充电中")
+
+        separate = buds(left=76, right=81, case=45)
+        self.assertEqual(panel.ring_photo(separate, "case")[4], theme.BATTERY_YELLOW.dark)
+        self.assertEqual(panel.reading_styles("buds", separate)["ring_case_value"]["fill"], theme.TEXT.dark)
+
     def test_low_device_row_says_it_needs_charging(self):
         panel = self.panel()
         styles = panel.reading_styles("mouse", Reading("Mouse", "", level=18, connected=True))
-        self.assertEqual(styles["row_value"]["text"], "18%")
+        self.assertEqual(styles["power"]["text"], "电池供电")
         self.assertEqual(styles["ring_value"]["text"], "18%")
         self.assertTrue(styles["row_sub"]["text"].startswith("电量低"))
 
     def test_unknown_level_shows_dashes(self):
         panel = self.panel()
         styles = panel.reading_styles("mouse", Reading("Mouse", "", connected=False, error="未连接"))
-        self.assertEqual(styles["row_value"]["text"], "--")
+        self.assertEqual(styles["ring_value"]["text"], "--")
+        self.assertEqual(styles["power"]["text"], "未知")
         self.assertEqual(styles["ring_case_value"]["text"], "--")
 
     def test_header_counts_devices_that_need_charging(self):
@@ -427,6 +458,20 @@ class GlassTests(unittest.TestCase):
         self.assertLess(light_dark, light_mid)
         self.assertGreaterEqual(light_dark, .91)
 
+    def test_light_glass_keeps_blues_and_warm_tones_visible(self):
+        from glass import LAYERS, luminance, tint
+
+        for role in ("base", "card"):
+            with self.subTest(role=role):
+                swatch, amount, bound = LAYERS[role][False]
+                tint_rgb = tuple(bytes.fromhex(swatch.light[1:]))
+                blue = tint((45, 77, 153), tint_rgb, amount, bound, False)
+                warm = tint((172, 84, 64), tint_rgb, amount, bound, False)
+                self.assertGreaterEqual(blue[2] - blue[0], 25)
+                self.assertGreaterEqual(warm[0] - warm[2], 25)
+                self.assertGreaterEqual(luminance(blue), bound)
+                self.assertGreaterEqual(luminance(warm), bound)
+
     def test_card_finish_adds_stable_grain_and_soft_lighting(self):
         import zlib
         from glass import CARD_FINISH, bgra_to_png
@@ -473,6 +518,21 @@ class GlassTests(unittest.TestCase):
         self.assertEqual(first[3], 0)                     # transparent corner
         self.assertEqual(middle[3], 255)                  # opaque edge mid-height
         self.assertEqual(tuple(middle[:3]), (30, 20, 10))  # BGRA became RGBA
+
+    def test_light_card_lets_the_base_show_through_its_entire_pane(self):
+        import zlib
+        from glass import LIGHT_CARD_OPACITY, bgra_to_png
+
+        side = 24
+        data = bgra_to_png(side, side, bytes((200, 210, 220, 255)) * side**2,
+                           side * 4, radius=7, opacity=LIGHT_CARD_OPACITY)
+        raw = zlib.decompress(data[data.index(b"IDAT") + 4:data.index(b"IEND") - 8])
+        alpha = lambda x, y: raw[y * (side * 4 + 1) + x * 4 + 4]
+        self.assertEqual(alpha(0, 0), 0)
+        self.assertLess(alpha(3, 0), alpha(12, 0))
+        self.assertEqual(alpha(12, 0), alpha(12, 12))
+        self.assertGreater(alpha(12, 12), 0)
+        self.assertLess(alpha(12, 12), 255)
 
 
 if __name__ == "__main__":

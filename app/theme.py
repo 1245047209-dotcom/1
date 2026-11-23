@@ -58,6 +58,8 @@ BACKGROUND = Color("#f2f2f7", "#000000")        # systemGroupedBackground
 SURFACE = Color("#ffffff", "#1c1c1e")           # secondarySystemGroupedBackground
 TEXT = Color("#000000", "#ffffff")              # label
 MUTED = Color("#6e6e73", "#98989d")             # secondaryLabel, darkened for small Windows text
+GLASS_MUTED = Color("#4a4d55", MUTED.dark)      # secondary labels over glass
+ACRYLIC_MUTED = Color(GLASS_MUTED.light, "#c2cad8")
 LINE = Color("#c6c6c8", "#38383a")              # separator
 SOFT = Color("#eeeef0", "#2c2c2e")              # tertiarySystemFill on a grouped row
 THUMBNAIL_BACKDROP = Color(SOFT.light, "#e4edff")
@@ -74,6 +76,7 @@ DISABLED_SURFACE = Color("#e5e5ea", "#2c2c2e")
 WARNING = Color("#c93400", "#ff9f0a")           # systemOrange (accessible variant in light)
 DANGER = Color("#d70015", "#ff453a")            # systemRed for text
 LOW = Color("#ff3b30", "#ff453a")               # systemRed for rings and percentages
+BATTERY_YELLOW = Color("#ffd60a", "#ffd60a")   # mid-range ring
 SHADOW = Color("#dcdce8", "#0d0d10")
 EDGE = Color("#d1d1d6", "#48484a")
 HIGHLIGHT = Color("#ffffff", "#55555f")
@@ -222,9 +225,10 @@ def title_bar(window):
         enabled = wintypes.BOOL(dark)
         if set_attribute(hwnd, 20, ctypes.byref(enabled), ctypes.sizeof(enabled)) != 0:
             set_attribute(hwnd, 19, ctypes.byref(enabled), ctypes.sizeof(enabled))
-        # Windows 11 supports matching the system caption to the selected Nexus theme.
+        # Acrylic draws through the default system caption. Other surfaces use Nexus colors.
         for attribute, swatch in ((35, BACKGROUND), (36, TEXT)):
-            value = int.from_bytes(bytes.fromhex(color(window, swatch)[1:]), "little")
+            value = (0xffffffff if getattr(window, "_nexus_acrylic", False)
+                     else int.from_bytes(bytes.fromhex(color(window, swatch)[1:]), "little"))
             setting = wintypes.DWORD(value)
             set_attribute(hwnd, attribute, ctypes.byref(setting), ctypes.sizeof(setting))
     except (AttributeError, OSError, tk.TclError):

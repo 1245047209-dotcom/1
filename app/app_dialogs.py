@@ -418,7 +418,7 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
         line = row(self, body, "自动", detail="跟随 Windows 的浅色 / 深色设置")
         self.auto_theme_switch = Switch(line, self.auto_theme, scale=self.scale, command=self._auto_theme_changed)
         self.auto_theme_switch.place(relx=1, rely=.5, anchor="e", x=-self.p(14))
-        line = row(self, body, "毛玻璃背景", detail="主窗口透出模糊的桌面壁纸")
+        line = row(self, body, "毛玻璃背景", detail="虚化主窗口后方的内容，取决于 Windows 支持")
         self.glass_switch = Switch(line, self.glass, scale=self.scale)
         self.glass_switch.place(relx=1, rely=.5, anchor="e", x=-self.p(14))
         # 刷新

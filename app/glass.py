@@ -2,7 +2,8 @@
 
 The part of the wallpaper behind the window is blurred and tinted towards the
 theme. Cards use a softer sample of the same wallpaper with fine grain, rounded
-corners and light on their upper edges.
+corners and light on their upper edges. In light mode they are translucent over
+the base sample.
 
 The wallpaper is sampled once per change at 1/16 of the monitor resolution and
 blurred there; every crop is upscaled by GDI+ with bicubic filtering, which is
@@ -27,18 +28,19 @@ MARGIN = 3           # extra samples around a crop so bicubic filtering never se
 RIM_WIDTH = 1.25     # glass highlight rim, physical px
 # Rim strength (top, bottom): white mixed into the card edge, strongest at the top like
 # light falling on iOS glass.
-RIM = {False: (.65, .18), True: (.27, .07)}
+RIM = {False: (.69, .14), True: (.27, .07)}
 
 # Top light, bottom shade and grain strength in 8-bit RGB levels.
-CARD_FINISH = {False: (7, 3, 2), True: (10, 5, 2)}
+CARD_FINISH = {False: (10, 4, 1), True: (10, 5, 2)}
+LIGHT_CARD_OPACITY = .77
 _GRAIN_WIDTH = 4
 _GRAIN_HEIGHT = 64
 _GRAIN = Random(237).choices((-1, 0, 0, 1), k=_GRAIN_WIDTH * _GRAIN_HEIGHT)
 
 # (tint colour role, tint amount, minimum / maximum luminance) for each layer.
 LAYERS = {
-    "base": {False: (theme.BACKGROUND, .58, .80), True: (theme.BACKGROUND, .57, .15)},
-    "card": {False: (theme.SURFACE, .69, .91), True: (theme.SURFACE, .61, .22)},
+    "base": {False: (theme.BACKGROUND, .36, .76), True: (theme.BACKGROUND, .57, .15)},
+    "card": {False: (theme.SURFACE, .32, .80), True: (theme.SURFACE, .61, .22)},
 }
 
 
@@ -158,15 +160,19 @@ def _finish_row(rgba, y, height, finish):
                 rgba[lane] = rgba[lane].translate(table)
 
 
-def bgra_to_png(width, height, bgra, stride, radius=0, rim=None, *, finish=None):
+def bgra_to_png(width, height, bgra, stride, radius=0, rim=None, *, finish=None, opacity=1.0):
     """RGBA PNG from top-down BGRA rows; ``radius`` > 0 rounds the four corners.
 
+    ``opacity`` scales the alpha of the pane, including its rounded mask.
     ``rim=(top, bottom)`` lightens a thin inner stroke towards white, fading from
     ``top`` to ``bottom`` strength: the highlight edge of a pane of glass.
     """
     radius = max(0, min(int(radius), width // 2, height // 2))
     corner = _corner(radius) if radius else ()
-    opaque = b"\xff" * width
+    interior = bytes((round(255 * opacity),)) * width
+    if opacity != 1.0 and corner:
+        scale_alpha = bytes(round(alpha * opacity) for alpha in range(256))
+        corner = tuple(row.translate(scale_alpha) for row in corner)
     rim_rows = _rim_rows(width, height, radius) if rim is not None else None
     scanlines = bytearray()
     for y in range(height):
@@ -175,7 +181,7 @@ def bgra_to_png(width, height, bgra, stride, radius=0, rim=None, *, finish=None)
         rgba[0::4], rgba[2::4] = row[2::4], row[0::4]
         if finish is not None:
             _finish_row(rgba, y, height, finish)
-        alpha = bytearray(opaque)
+        alpha = bytearray(interior)
         edge = y if y < radius else height - 1 - y if y >= height - radius else None
         if edge is not None:
             alpha[:radius] = corner[edge]
@@ -355,7 +361,8 @@ class Backdrop:
                                            place=lambda _w, _h: (source, (0, 0, width, height)))
         rim = RIM[dark] if role == "card" else None
         finish = CARD_FINISH[dark] if role == "card" else None
-        data = bgra_to_png(width, height, bgra, stride, radius, rim, finish=finish)
+        opacity = LIGHT_CARD_OPACITY if role == "card" and not dark else 1.0
+        data = bgra_to_png(width, height, bgra, stride, radius, rim, finish=finish, opacity=opacity)
         self.cache[key] = data
         while len(self.cache) > 16:
             self.cache.pop(next(iter(self.cache)))

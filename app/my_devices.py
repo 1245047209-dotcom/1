@@ -33,13 +33,30 @@ EARBUD_NOTE = "耳机显示左右耳中较低的一侧。"
 WINDOW_MARGIN = 16
 BATTERY_PARTS = (("left", "左耳"), ("right", "右耳"), ("case", "充电仓"))
 COMPONENT_BATTERY_ICON_WIDTH = 28
-LOW_LEVEL = 20          # iOS turns the battery ring red at 20 %
+LOW_LEVEL = 20
+MEDIUM_LEVEL = 60
+ROW_LABEL_FONT = (theme.FONT, 10)
+ROW_METADATA_FONT = (theme.FONT, 10, "bold")
+ROW_METADATA_ICON_SPACE = 23
+SHORT_POWER_LABELS = {
+    "已接电，未充电": "接电未充电",
+    "部分状态未上报": "部分未上报",
+    "全部电池充电中": "全部充电",
+    "左右耳充电中": "左右耳充电",
+    "充电仓充电中": "充电仓充电",
+    "左耳及充电仓充电中": "左耳/仓充电",
+    "右耳及充电仓充电中": "右耳/仓充电",
+}
 
 
-def clipped_label(canvas, text, font, max_width):
+def clipped_label(canvas, text, font, max_width, *, short=None):
     """Keep a single-line canvas label inside its own card/column."""
     if canvas.tk.call("font", "measure", font, text) <= max_width:
         return text
+    if short is not None:
+        text = short
+        if canvas.tk.call("font", "measure", font, text) <= max_width:
+            return text
     while text and canvas.tk.call("font", "measure", font, text + "…") > max_width:
         text = text[:-1]
     return text + "…"
@@ -391,7 +408,10 @@ class NexusPanel:
         self.receiver_button = IconButton(self.canvas, "add", self.open_receiver_search, ui=self.ui, label="添加设备")
         self.settings_button = IconButton(self.canvas, "settings", self.open_settings, ui=self.ui, label="设置")
         self.row_hits = []
+        from acrylic import Acrylic
         from glass import Backdrop
+        self.acrylic = Acrylic(root)
+        self.native_glass = False
         self.glass = Backdrop(root, self.ui.native)
         self.glass_enabled = bool(cfg.get("glass_backdrop", True))
         self.glass_items = []        # [(canvas, item, width px, height px, role, radius px)]
@@ -407,6 +427,10 @@ class NexusPanel:
                                            highlightthickness=0, yscrollincrement=self.ui.px(24))
         from ios_controls import ThinScrollbar
         self.overview_scrollbar = ThinScrollbar(self.canvas, self.overview_canvas.yview, p=self.ui.px)
+        self._acrylic_canvases_ready = all(self.acrylic.attach(widget) for widget in (
+            self.canvas, self.overview_canvas, self.overview_scrollbar,
+            self.receiver_button, self.settings_button, self.refresh_button,
+        ))
         self.overview_canvas.configure(yscrollcommand=self._overview_scrolled)
         self.overview_scrollable = False
         self._content_mode = None
@@ -431,6 +455,7 @@ class NexusPanel:
         root.resizable(True, False)
         root.bind("<Configure>", self.on_configure)
         root.bind("<Configure>", self.glass_moved, add="+")
+        root.bind("<Map>", self.glass_mapped, add="+")
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<F5>", self.refresh_shortcut)
         root.bind("<Control-r>", self.refresh_shortcut)
@@ -450,6 +475,11 @@ class NexusPanel:
     def fade_background(self):
         average = getattr(getattr(self, "glass", None), "average", None)
         return average if self.glass_on() and average else self.color(theme.BACKGROUND)
+
+    def overview_muted(self):
+        if getattr(self, "native_glass", False):
+            return self.color(theme.ACRYLIC_MUTED)
+        return self.color(theme.GLASS_MUTED if self.glass_on() else theme.MUTED)
 
     # ---- frosted glass --------------------------------------------------------------
     def glass_on(self):
@@ -529,6 +559,10 @@ class NexusPanel:
     def glass_moved(self, event):
         if event.widget is self.root:
             self.schedule_glass()
+
+    def glass_mapped(self, event):
+        if event.widget is self.root and self.glass_enabled and not self.native_glass:
+            self.root.after_idle(self.draw)
 
     def _overview_scrolled(self, first, last):
         self.overview_scrollbar.set(first, last)
@@ -740,6 +774,9 @@ class NexusPanel:
                       self.runtime_after_id, getattr(self, "_geometry_after_id", None)):
             if timer is not None:
                 self.root.after_cancel(timer)
+        acrylic = getattr(self, "acrylic", None)
+        if acrylic is not None:
+            acrylic.close()
         self.root.destroy()
 
     def runtime_tick(self):
@@ -944,7 +981,6 @@ class NexusPanel:
             values[name + "_value"] = {
                 "text": f"{level}%" if level is not None else "--",
                 "fill": self.color(theme.LOW if low else theme.TEXT if level is not None else theme.MUTED)}
-        values["row_value"] = dict(values["ring_value"])
         if reading.components and component_charging_text(reading.components) and not reading.error:
             summary = component_charging_text(reading.components)
         low = self.needs_charge(reading)
@@ -952,8 +988,21 @@ class NexusPanel:
             summary = "电量低"
         when = self.reading_times.ago(key, reading)
         values["row_sub"] = {"text": " · ".join(part for part in (summary, when) if part),
-                             "fill": self.color(theme.DANGER if low and online else theme.MUTED)}
+                             "fill": self.color(theme.DANGER) if low and online else self.overview_muted()}
         return values
+
+    def fit_row_label(self, text, font, width, *, short=None):
+        return clipped_label(self.overview_canvas, text, self.ui.font(font), self.ui.px(width), short=short)
+
+    def fit_row_styles(self, styles):
+        """Keep live row text within its columns without shortening the details sheet."""
+        subtitle_width, power_width = self.row_text_widths
+        subtitle = styles["row_sub"]
+        subtitle["text"] = self.fit_row_label(subtitle["text"], ROW_LABEL_FONT, subtitle_width)
+        power = styles["power"]
+        power_text = power["text"]
+        styles["row_power"] = {**power, "text": self.fit_row_label(
+            power_text, ROW_METADATA_FONT, power_width, short=SHORT_POWER_LABELS.get(power_text))}
 
     def header_styles(self):
         entries = self.device_entries()
@@ -974,7 +1023,7 @@ class NexusPanel:
             when = " · " + age + ("更新" if age == "刚刚" else " 更新")
         # iOS colours only the warning; the refresh time stays secondary grey.
         return {"summary": {"text": label, "fill": self.color(theme.DANGER if low else theme.MUTED)},
-                "summary_time": {"text": when, "fill": self.color(theme.MUTED)}}
+                "summary_time": {"text": when, "fill": self.overview_muted()}}
 
     def align_header_time(self):
         """Keep the grey refresh time right after the (variable-width) summary."""
@@ -1006,6 +1055,7 @@ class NexusPanel:
             if reading is None:
                 continue
             values = self.reading_styles(key, reading)
+            self.fit_row_styles(values)
             for part in (None, "left", "right", "case"):
                 name = f"{part}_battery" if part is not None else "battery"
                 binding = self.live.bindings.get((key, name))
@@ -1058,13 +1108,25 @@ class NexusPanel:
         self.canvas.delete("all")
         self.overview_canvas.delete("all")
         self.glass_items, self.glass_buttons, self._glass_pending = [], [], []
-        self._glass_ready = bool(getattr(self, "glass_enabled", False)) and self.glass.prepare()
+        glass_enabled = bool(getattr(self, "glass_enabled", False))
+        acrylic = getattr(self, "acrylic", None)
+        native_glass = acrylic is not None and acrylic.apply(
+            glass_enabled and self._acrylic_canvases_ready, theme.is_dark(self.root))
+        was_native = getattr(self, "native_glass", False)
+        if native_glass != was_native:
+            self.native_glass = self.root._nexus_acrylic = native_glass
+            theme.title_bar(self.root)
+        self._glass_ready = (glass_enabled and not native_glass
+                             and (acrylic is None or acrylic.wallpaper_allowed) and self.glass.prepare())
         yield
 
         canvas = self.canvas
-        background = self.color(theme.BACKGROUND)
+        background = acrylic.background_color if native_glass else self.color(theme.BACKGROUND)
         canvas.configure(bg=background)
         self.overview_canvas.configure(bg=background)
+        if native_glass or was_native:
+            self.overview_scrollbar.configure(bg=background)
+            self.overview_scrollbar.redraw()
         # iOS large title with a one-line summary; round buttons on the right.
         canvas.create_text(20, 60, text="设备", anchor="w", fill=self.color(theme.TEXT),
                            font=(theme.FONT, 26, "bold"))
@@ -1109,7 +1171,7 @@ class NexusPanel:
             body.create_text(w/2, body_height/2 - 15, text="还没有添加设备",
                              fill=self.color(theme.TEXT), font=(theme.FONT, 16, "bold"))
             body.create_text(w/2, body_height/2 + 16, text="点右上角的「+」添加键盘、鼠标或耳机",
-                             fill=self.color(theme.MUTED), font=(theme.FONT, 10))
+                             fill=self.overview_muted(), font=(theme.FONT, 10))
             yield from self.ui.canvas_steps(body)
             self.place_glass_cards(body, w, viewport)
             return
@@ -1239,6 +1301,8 @@ class NexusPanel:
         x1, y1, x2, y2 = rect
         width, height = self.ui.px(x2) - self.ui.px(x1), self.ui.px(y2) - self.ui.px(y1)
         corner, fill = self.ui.px(radius), self.color(swatch)
+        if swatch is theme.SURFACE and getattr(self, "native_glass", False):
+            fill = self.acrylic.surface_color
         logical, _physical = self.physical_image(
             ("surface", width, height, corner, fill, opacity), x2 - x1, y2 - y1,
             lambda: rounded_surface_png(width, height, corner, fill, opacity=opacity))
@@ -1258,8 +1322,13 @@ class NexusPanel:
 
     def ring_photo(self, reading, part=None):
         level, charging = self.ring_state(reading, part)
-        low = self.needs_charge(reading, part)
-        progress = self.color(theme.LOW if low else theme.RING)
+        ring_color = theme.RING
+        if level is not None and not charging:
+            if level <= LOW_LEVEL:
+                ring_color = theme.LOW
+            elif level <= MEDIUM_LEVEL:
+                ring_color = theme.BATTERY_YELLOW
+        progress = self.color(ring_color)
         track = self.color(theme.RING_TRACK)
         badge = (self.color(theme.SURFACE), self.color(theme.RING), "#ffffff") if charging else None
         size, stroke = self.ui.px(IOS_RING), max(3, self.ui.px(7))
@@ -1306,7 +1375,7 @@ class NexusPanel:
         canvas = self.overview_canvas
         rings = list(self.ring_entries(entries)) if rings is None else rings
         layout = ios_layout(width, len(rings), len(entries), note=self.earbud_note(rings))
-        text, muted = self.color(theme.TEXT), self.color(theme.MUTED)
+        text, muted = self.color(theme.TEXT), self.overview_muted()
         column = (layout["widget"][2] - layout["widget"][0] - 20) / IOS_RING_COLUMNS
         self.surface(canvas, layout["widget"], 20)
         for (key, device, part, label, glyph_name), (cx, ring_top) in zip(rings, layout["rings"]):
@@ -1329,25 +1398,50 @@ class NexusPanel:
                            fill=muted, font=(theme.FONT, 10))
         self.surface(canvas, layout["group"], 12)
         chevron, chevron_family = theme.glyph(canvas, "chevron")
-        thumbnail_opacity = .07 if theme.is_dark(self.root) else 1.0
+        battery, battery_family = theme.glyph(canvas, "battery")
+        wireless_icon = self.chrome_image("wireless-icon.png")
+        glass = getattr(self, "native_glass", False) or self.glass_on()
+        thumbnail_opacity = .07 if theme.is_dark(self.root) else .42 if glass else 1.0
+        left, _, right, _ = layout["group"]
+        metadata_width = 91 + min(28, max(0, width - MIN_WIDTH) / 4)
+        power_x = right - 24 - metadata_width
+        connection_x = power_x - 6 - metadata_width
+        identity_width = connection_x - (left + 70) - 7
+        metadata_text_width = metadata_width - ROW_METADATA_ICON_SPACE
+        self.row_text_widths = identity_width, metadata_text_width
+        title_font = (theme.FONT, 13)
         for index, ((key, device), (x1, y1, x2, y2)) in enumerate(zip(entries, layout["rows"])):
             self.visible_devices[key] = device
             reading = self.readings.get(key, Reading(device.label if device else KEYBOARD_TITLE, "正在读取…"))
             styles = self.reading_styles(key, reading)
+            self.fit_row_styles(styles)
             middle = (y1 + y2) / 2
             if index:
                 canvas.create_line(x1 + 70, y1, x2, y1, fill=self.color(theme.LINE), width=1)
             self.surface(canvas, (x1 + 14, middle - 22, x1 + 58, middle + 22), 10,
                          theme.THUMBNAIL_BACKDROP, opacity=thumbnail_opacity)
             self.draw_thumbnail(canvas, device, x1 + 36, middle)
-            title_font = (theme.FONT, 13)
             model = device.model if device else "AULA F87 Pro"
             canvas.create_text(x1 + 70, middle - 11, anchor="w", fill=text, font=title_font,
-                               text=clipped_label(canvas, model, title_font, x2 - x1 - 150))
+                               text=self.fit_row_label(model, title_font, identity_width))
             self.live_text(canvas, key, "row_sub", x1 + 70, middle + 13, anchor="w",
-                           font=(theme.FONT, 10), **styles["row_sub"])
-            self.live_text(canvas, key, "row_value", x2 - 32, middle, anchor="e",
-                           font=(theme.NUM_FONT, 13), **styles["row_value"])
+                           font=ROW_LABEL_FONT, **styles["row_sub"])
+            for x, label in ((connection_x, "连接方式"), (power_x, "供电状态")):
+                canvas.create_text(x, middle - 11, anchor="w", text=label, fill=muted, font=ROW_LABEL_FONT)
+            value_y = middle + 11
+            connection = connection_text(device)
+            if connection in ("2.4G 无线", "USB 无线接收器"):
+                canvas.create_image(connection_x + 10, value_y, image=wireless_icon)
+            else:
+                icon, family = theme.glyph(canvas, "bluetooth" if is_bluetooth(device) else "usb")
+                canvas.create_text(connection_x + 10, value_y, text=icon, fill=text, font=(family, 11))
+            connection_value = self.fit_row_label(connection, ROW_METADATA_FONT, metadata_text_width,
+                                                  short="无线接收器" if connection == "USB 无线接收器" else None)
+            canvas.create_text(connection_x + ROW_METADATA_ICON_SPACE, value_y, anchor="w",
+                               text=connection_value, fill=text, font=ROW_METADATA_FONT)
+            canvas.create_text(power_x + 10, value_y, text=battery, fill=text, font=(battery_family, 11))
+            self.live_text(canvas, key, "row_power", power_x + ROW_METADATA_ICON_SPACE, value_y, anchor="w",
+                           font=ROW_METADATA_FONT, **styles["row_power"])
             canvas.create_text(x2 - 14, middle, anchor="e", text=chevron, fill=self.color(theme.CHEVRON),
                                font=(chevron_family, 10))
             self.row_hits.append((key, (x1, y1, x2, y2)))
