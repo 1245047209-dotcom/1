@@ -2,6 +2,7 @@
 from pathlib import Path
 import subprocess
 import sys
+from tempfile import TemporaryFile
 import time
 
 
@@ -16,19 +17,25 @@ if sys.getwindowsversion().build < 22621:
 
 if tc.ui_hwnd():
     raise SystemExit("Release startup check requires a clean test installation")
+errors = TemporaryFile()
 backend = subprocess.Popen(
     [str(app / "runtime" / "pythonw.exe"), "-B", str(app / "my_devices.pyw")],
-    cwd=app, creationflags=subprocess.CREATE_NO_WINDOW,
+    cwd=app, stderr=errors, creationflags=subprocess.CREATE_NO_WINDOW,
 )
 hwnd = 0
 try:
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + 30
     while not hwnd and backend.poll() is None and time.monotonic() < deadline:
         hwnd = tc.ui_hwnd()
         if not hwnd:
             time.sleep(.05)
-    if installer.window_executable(hwnd) != installer.FRONTEND:
-        raise RuntimeError("Installed entry point did not register the WPF main window")
+    executable = installer.window_executable(hwnd)
+    if executable != installer.FRONTEND:
+        errors.seek(0)
+        diagnostics = errors.read().decode("utf-8", errors="replace").strip()
+        if diagnostics:
+            print(diagnostics, file=sys.stderr)
+        raise RuntimeError(f"Expected the WPF main window, got {executable!r}. Backend status: {backend.poll()!r}")
     if not installer.user32.PostMessageW(hwnd, 0x0010, 0, 0):  # WM_CLOSE
         raise RuntimeError("Could not close the native main window")
     if backend.wait(timeout=10) != 0 or tc.ui_hwnd():
@@ -42,3 +49,4 @@ finally:
             backend.wait(timeout=3)
         except subprocess.TimeoutExpired:
             backend.terminate()
+    errors.close()

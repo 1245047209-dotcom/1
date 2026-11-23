@@ -73,10 +73,11 @@ internal sealed class NativeWindow
             hwnd = new WindowInteropHelper(window).Handle;
             HwndSource.FromHwnd(hwnd).CompositionTarget.BackgroundColor = Colors.Transparent;
             RefreshBackdrop();
+            // The backend registers the HWND. It does not need the desktop compositor's first frame.
+            Send(new { action = "ready", hwnd = hwnd.ToInt64() });
         };
         window.Activated += delegate { RefreshBackdrop(); };
         window.Deactivated += delegate { RefreshBackdrop(); };
-        window.ContentRendered += SendReady;
         window.Closed += delegate
         {
             closing = true;
@@ -187,12 +188,6 @@ internal sealed class NativeWindow
                 window.Close();
                 break;
         }
-    }
-
-    private void SendReady(object sender, EventArgs args)
-    {
-        window.ContentRendered -= SendReady;
-        Send(new { action = "ready", hwnd = hwnd.ToInt64() });
     }
 
     private void SendAction(string action, string id = null)

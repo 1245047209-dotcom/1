@@ -150,7 +150,7 @@ class NativePanel:
             # The reader owns EOF handling so an explicit close can drain first.
             pass
 
-    def wait_until_ready(self, timeout=4.0):
+    def wait_until_ready(self, timeout=12.0):
         deadline = time.monotonic() + timeout
         while (remaining := deadline - time.monotonic()) > 0:
             try:
@@ -286,18 +286,22 @@ def start_native_panel(panel):
         command.append("--glass-off")
     try:
         process = subprocess.Popen(command, cwd=APP_ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, encoding="utf-8", errors="replace",
+                                   encoding="utf-8", errors="replace",
                                    creationflags=subprocess.CREATE_NO_WINDOW)
-    except OSError:
+    except OSError as error:
+        if sys.stderr is not None:
+            print("Nexus native startup:", error, file=sys.stderr)
         return None
     native = NativePanel(panel, process)
     try:
         if native.wait_until_ready():
             native.start()
             return native
-    except Exception:
-        # Fall back to Tk if the native child can't finish its initial handshake.
-        pass
+        if sys.stderr is not None:
+            print("Nexus native startup: no valid window handle, child status:", process.poll(), file=sys.stderr)
+    except Exception as error:
+        if sys.stderr is not None:
+            print("Nexus native startup:", error, file=sys.stderr)
     native.close()
     panel.native_panel = None
     panel.root._nexus_native_hwnd = None
