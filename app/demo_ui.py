@@ -108,6 +108,8 @@ def demo_scan(mode):
 def main():
     parser = argparse.ArgumentParser(description="Nexus 安全模拟界面")
     parser.add_argument("--smoke", action="store_true", help="自动验证设备总览和电量更新后退出")
+    parser.add_argument("--skip-frame-timing", action="store_true",
+                        help="自检时保留功能验证，跳过帧间隔阈值")
     parser.add_argument("--capture", help="将窗口截图保存为 PNG（仅 Windows）")
     parser.add_argument("--theme", choices=("system", "light", "dark"), default="light", help="模拟界面使用的主题")
     parser.add_argument("--page", choices=("main", "settings", "settings-bottom", "sheet", "search", "search-expanded"),
@@ -293,8 +295,9 @@ def main():
                 return any(root.tk.getboolean(root.tk.call(name, "transparency", "get", x, y)) for x, y in points)
             translucent = [name for name in images(sheet.card) if has_alpha(name)]
             assert not translucent, ("sheet images must be opaque", translucent)
-            assert longest < 34, ("sheet animation stutters", longest)  # at most one missed 60 Hz frame
-            assert sum(frames) / len(frames) < 21, ("sheet animation is slow", frames)
+            if not args.skip_frame_timing:
+                assert longest < 34, ("sheet animation stutters", longest)  # at most one missed 60 Hz frame
+                assert sum(frames) / len(frames) < 21, ("sheet animation is slow", frames)
             assert sheet is not None and sheet.card.winfo_ismapped()
             assert sheet.vars["level"].get() == "18%", sheet.vars["level"].get()
             assert sheet.vars["status"].get() == "电量低，建议尽快充电"

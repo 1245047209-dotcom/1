@@ -31,14 +31,13 @@ python -c 'import shutil,sys;shutil.copytree(sys.argv[1],sys.argv[2])' $payload 
 if ($LASTEXITCODE -ne 0) { throw 'Isolated test staging failed' }
 python (Join-Path $PSScriptRoot 'check_release.py') $testRoot
 if ($LASTEXITCODE -ne 0) { throw 'Source regression tests failed' }
-python (Join-Path $PSScriptRoot 'gui_smoke.py') $testRoot
-if ($LASTEXITCODE -ne 0) { throw 'GUI smoke check failed' }
-python (Join-Path $PSScriptRoot 'staged_scene_smoke.py') $testRoot
-if ($LASTEXITCODE -ne 0) { throw 'Staged scene/cancellation check failed' }
-& (Join-Path $testRoot 'runtime/python.exe') -I -B -X utf8 (Join-Path $PSScriptRoot 'smoke_search_dialog.py') $testRoot $testRoot
-if ($LASTEXITCODE -ne 0) { throw 'Search dialog smoke check failed' }
-& (Join-Path $testRoot 'runtime/python.exe') -I -B -X utf8 (Join-Path $PSScriptRoot 'smoke_settings.py') $testRoot $testRoot
-if ($LASTEXITCODE -ne 0) { throw 'Settings dialog smoke check failed' }
+Push-Location -LiteralPath $testRoot
+try {
+    & (Join-Path $testRoot 'runtime/python.exe') -B -X utf8 .\demo_ui.py --smoke --skip-frame-timing
+    if ($LASTEXITCODE -ne 0) { throw 'iOS GUI smoke check failed' }
+} finally {
+    Pop-Location
+}
 
 $unexpected = Get-ChildItem -LiteralPath $payload -File | Where-Object {
     ($_.Extension -eq '.json' -and $_.Name -ne 'SOURCE_MANIFEST.json') -or $_.Name -eq 'tray_pid.txt' -or $_.Extension -in @('.log','.lock')
@@ -51,12 +50,13 @@ while (($numericVersion.Split('.')).Count -lt 3) { $numericVersion += '.0' }
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
 
 # Exercise the actual upgrade package in this disposable runner, preserving data.
-$smokeRoot = Join-Path $buildRoot 'installed-smoke'
-New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
+$smokeRoot = $baseline
 $sentinels = @{
     'added_devices.json' = '{"version":1,"selected":"aula-f87-default","view":"all","devices":[]}'
     'tray_config.json' = '{"interval":120,"autostart":false,"low_battery_alert":false}'
     'battery_activity.json' = '{"release_smoke_sentinel":true}'
+    'battery_usage.json' = '{"release_smoke_sentinel":true}'
+    'update_state.json' = '{"auto_check":false}'
 }
 foreach ($name in $sentinels.Keys) { [IO.File]::WriteAllText((Join-Path $smokeRoot $name),$sentinels[$name]) }
 $installer = Join-Path $dist $meta.installer

@@ -1,4 +1,4 @@
-# Nexus 外设电量中心 · v73
+# Nexus 外设电量中心 · v73.1
 
 ## 运行
 
@@ -14,7 +14,7 @@ py -3.12 -m unittest discover -s tests
 
 也可使用附带的启动 BAT；若复制了现有便携版的 runtime 文件夹，会优先使用它。源码包不附个人设备列表，首次运行可通过“搜索设备”加入外设。
 
-## v73-iOS（界面改版，基于 v73）
+## v73.1（v73-iOS 界面改版）
 
 - 配色改用 iOS 系统色：浅色分组背景 #F2F2F7 / 白色卡片，深色纯黑背景 / #1C1C1E 卡片；强调色为 iOS 系统蓝，电量圆环为系统绿，20% 及以下变为系统红。
 - 字体改用系统自带的 Microsoft YaHei UI（有真正的粗体），百分比使用 Segoe UI Semibold，图标使用 Segoe Fluent Icons（Windows 10 为 Segoe MDL2 Assets）。不再注册附带的思源黑体。
