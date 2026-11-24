@@ -987,8 +987,9 @@ class NexusPanel:
         styles["row_power"] = {**power, "text": self.fit_row_label(
             power_text, ROW_METADATA_FONT, power_width, short=SHORT_POWER_LABELS.get(power_text))}
 
-    def header_styles(self):
-        entries = self.device_entries()
+    def header_styles(self, entries=None):
+        if entries is None:
+            entries = self.device_entries()
         readings = [self.readings.get(key) for key, _device in entries]
         count = sum(reading.ok or reading.connected is True for reading in readings if reading is not None)
         low = sum(self.needs_charge(reading) for reading in readings if reading is not None)

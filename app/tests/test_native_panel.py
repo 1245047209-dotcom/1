@@ -6,6 +6,9 @@ from unittest.mock import Mock, patch
 
 from device_readers import Reading
 from my_devices import NexusPanel
+from native_panel import NativePanel, make_snapshot
+from reading_ui import ReadingTimes
+from saved_devices import DEFAULT_DEVICE_ID, SavedDevice
 
 
 class IndependentPanelTests(unittest.TestCase):
@@ -74,6 +77,48 @@ class IndependentPanelTests(unittest.TestCase):
     def test_native_charging_is_shown_without_a_fabricated_remaining_time(self):
         reading = Reading("Mouse", "", level=80, status="充电中", source="HID++ 2.0")
         self.assertEqual(NexusPanel.device_runtime_text(reading), "充电中")
+
+
+class NativeBridgeTests(unittest.TestCase):
+    def test_action_failure_does_not_stop_other_actions_or_polling(self):
+        error = RuntimeError("dialog unavailable")
+        panel = SimpleNamespace(root=Mock(), open_settings=Mock(side_effect=error), refresh=Mock())
+        bridge = NativePanel.__new__(NativePanel)
+        bridge.panel = panel
+        bridge._incoming = queue.Queue()
+        bridge._incoming.put({"action": "settings"})
+        bridge._incoming.put({"action": "refresh"})
+        bridge._send_snapshot = Mock()
+
+        with patch("native_panel.make_snapshot", return_value={"type": "snapshot"}):
+            bridge._tick()
+
+        panel.root.report_callback_exception.assert_called_once_with(RuntimeError, error, error.__traceback__)
+        panel.refresh.assert_called_once_with()
+        bridge._send_snapshot.assert_called_once_with({"type": "snapshot"})
+        panel.root.after.assert_called_once_with(50, bridge._tick)
+
+    def test_snapshot_reuses_overview_data_in_device_details(self):
+        panel = NexusPanel.__new__(NexusPanel)
+        panel.saved_devices = [SavedDevice("mouse", "mouse", "PRO WIRELESS", "Logitech", "046D:C539", "鼠标")]
+        panel.readings = {DEFAULT_DEVICE_ID: Reading("F87 Pro", "", level=58, connected=True),
+                          "mouse": Reading("PRO WIRELESS", "", level=18, connected=True)}
+        panel.reading_times = ReadingTimes()
+        panel.appearance, panel.glass_enabled, panel.busy = SimpleNamespace(dark=False), True, False
+        panel.device_entries = Mock(wraps=panel.device_entries)
+        panel.reading_styles = Mock(wraps=panel.reading_styles)
+
+        with patch("device_sheet._runtime_text", return_value="约 5 天"):
+            snapshot = make_snapshot(panel)
+
+        panel.device_entries.assert_called_once_with()
+        self.assertEqual(panel.reading_styles.call_count, 2)
+        keyboard, mouse = snapshot["devices"]
+        self.assertEqual(keyboard["details"]["level"], "58%")
+        self.assertEqual(keyboard["connection"], "2.4G 无线")
+        self.assertIn({"label": "续航", "value": "约 5 天"}, keyboard["details"]["rows"])
+        self.assertTrue(mouse["low"])
+        self.assertEqual(snapshot["summary"], "1 台需要充电")
 
 
 if __name__ == "__main__":

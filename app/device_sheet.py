@@ -53,10 +53,15 @@ def _runtime_text(reading):
 
 def sheet_values(panel, key):
     """Texts and colour roles shown by the sheet for one device (no Tk needed)."""
-    from my_devices import component_charging_text, connection_text, product_kind
     device = dict(panel.device_entries()).get(key)
     reading = panel.readings.get(key) or Reading(device.label if device else KEYBOARD_TITLE, "正在读取…")
-    styles = panel.reading_styles(key, reading)
+    return format_sheet_values(panel, key, device, reading, panel.reading_styles(key, reading))
+
+
+def format_sheet_values(panel, key, device, reading, styles):
+    """Build detail data from the reading and styles already used by the overview."""
+    from my_devices import component_charging_text, connection_text, product_kind
+
     level, charging = panel.ring_state(reading)
     low = panel.needs_charge(reading)
     if low:

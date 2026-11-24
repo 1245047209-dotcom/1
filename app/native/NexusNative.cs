@@ -226,8 +226,8 @@ internal sealed class NativeWindow
         if (hwnd == IntPtr.Zero || closing) return;
         DesktopAcrylic.SetTheme(hwnd, dark);
         bool effectsEnabled = !Equals(Registry.GetValue(PersonalizeKey, "EnableTransparency", 1), 0);
-        bool displayNative = window.IsActive && glass && effectsEnabled && !SystemParameters.HighContrast
-            && !DesktopAcrylic.IsBatterySaverEnabled() && DesktopAcrylic.TryEnable(hwnd);
+        bool displayNative = glass && effectsEnabled && !SystemParameters.HighContrast
+            && !DesktopAcrylic.IsBatterySaverEnabled() && DesktopAcrylic.TryEnable(hwnd, dark);
         if (displayNative)
         {
             window.SetResourceReference(Control.BackgroundProperty, "ClientTintBrush");
@@ -337,31 +337,36 @@ internal sealed class NativeWindow
         DeviceEntry entry = FindDevice(detailId);
         if (entry == null) { detailWindow.Close(); return; }
 
-        detailWindow.Title = entry.Name + " · 设备信息";
-        detailWindow.Background = ResourceBrush("BackdropFallbackBrush");
-        detailWindow.Foreground = ResourceBrush("TextBrush");
-        detailContent.Children.Clear();
-        AddDetailLine(entry.Name, 21, true);
+        string title = entry.Name + " · 设备信息";
+        if (detailWindow.Title != title) detailWindow.Title = title;
+        Brush background = ResourceBrush("BackdropFallbackBrush");
+        Brush foreground = ResourceBrush("TextBrush");
+        if (detailWindow.Background != background) detailWindow.Background = background;
+        if (detailWindow.Foreground != foreground) detailWindow.Foreground = foreground;
+        int line = 0;
+        SetDetailLine(ref line, entry.Name, 21, true);
         DeviceDetails info = entry.Details;
         if (info != null)
         {
-            AddDetailLine(info.level, 27, true);
-            AddDetailLine(info.caption, 13, false);
-            AddDetailLine(info.timestamp, 12, false);
+            SetDetailLine(ref line, info.level, 27, true);
+            SetDetailLine(ref line, info.caption, 13, false);
+            SetDetailLine(ref line, info.timestamp, 12, false);
             foreach (ComponentDetail component in info.components ?? new ComponentDetail[0])
-                AddDetailLine(component.label + "  " + component.level + (component.charging ? "  充电中" : "") +
+                SetDetailLine(ref line, component.label + "  " + component.level + (component.charging ? "  充电中" : "") +
                     (String.IsNullOrEmpty(component.time) ? "" : "  " + component.time), 13, false);
             foreach (DetailRow row in info.rows ?? new DetailRow[0])
-                if (!String.IsNullOrEmpty(row.value)) AddDetailLine(row.label + "  " + row.value, 13, false);
-            AddDetailLine(info.detail, 12, false);
-            AddDetailLine(info.source, 12, false);
+                if (!String.IsNullOrEmpty(row.value)) SetDetailLine(ref line, row.label + "  " + row.value, 13, false);
+            SetDetailLine(ref line, info.detail, 12, false);
+            SetDetailLine(ref line, info.source, 12, false);
         }
         else
         {
-            AddDetailLine(entry.Status, 13, false);
-            AddDetailLine(entry.Connection, 13, false);
-            AddDetailLine(entry.Power, 13, false);
+            SetDetailLine(ref line, entry.Status, 13, false);
+            SetDetailLine(ref line, entry.Connection, 13, false);
+            SetDetailLine(ref line, entry.Power, 13, false);
         }
+        while (detailContent.Children.Count > line)
+            detailContent.Children.RemoveAt(detailContent.Children.Count - 1);
     }
 
     private DeviceEntry FindDevice(string id)
@@ -371,11 +376,23 @@ internal sealed class NativeWindow
         return null;
     }
 
-    private void AddDetailLine(string value, double size, bool strong)
+    private void SetDetailLine(ref int index, string value, double size, bool strong)
     {
         if (String.IsNullOrWhiteSpace(value)) return;
-        detailContent.Children.Add(new TextBlock { Text = value, FontSize = size, TextWrapping = TextWrapping.Wrap,
-            FontWeight = strong ? FontWeights.SemiBold : FontWeights.Normal, Margin = new Thickness(0, 0, 0, 8) });
+        FontWeight weight = strong ? FontWeights.SemiBold : FontWeights.Normal;
+        if (index == detailContent.Children.Count)
+        {
+            detailContent.Children.Add(new TextBlock { Text = value, FontSize = size,
+                TextWrapping = TextWrapping.Wrap, FontWeight = weight, Margin = new Thickness(0, 0, 0, 8) });
+        }
+        else
+        {
+            var line = (TextBlock)detailContent.Children[index];
+            if (line.Text != value) line.Text = value;
+            if (line.FontSize != size) line.FontSize = size;
+            if (line.FontWeight != weight) line.FontWeight = weight;
+        }
+        index++;
     }
 }
 
@@ -383,6 +400,12 @@ internal static class DesktopAcrylic
 {
     [StructLayout(LayoutKind.Sequential)]
     private struct Margins { public int Left, Right, Top, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct AccentPolicy { public int State, Flags; public uint Tint; public int Animation; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CompositionAttribute { public int Attribute; public IntPtr Data, Size; }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SystemPowerStatus
@@ -405,6 +428,10 @@ internal static class DesktopAcrylic
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool AllowSetForegroundWindow(int processId);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowCompositionAttribute(IntPtr window, ref CompositionAttribute attribute);
+
     private const int UseImmersiveDarkMode = 20;
     private const int CaptionColor = 35;
     private const int TextColor = 36;
@@ -412,6 +439,8 @@ internal static class DesktopAcrylic
     private const int DesktopAcrylicBackdrop = 3;
     private const int NoBackdrop = 1;
     private const int DefaultColor = -1;
+    private const int AccentPolicyAttribute = 19;
+    private const int AcrylicBlurBehind = 4;
 
     private static int SetAttribute(IntPtr window, int attribute, int value)
     {
@@ -428,16 +457,38 @@ internal static class DesktopAcrylic
 
     internal static void AllowBackendFocus(int processId) { AllowSetForegroundWindow(processId); }
 
-    internal static bool TryEnable(IntPtr window)
+    internal static bool TryEnable(IntPtr window, bool dark)
     {
+        // Use the same compositor material in both activation states. The DWM
+        // system backdrop remains a fallback if the accent policy is unavailable.
+        var normalMargins = new Margins();
+        DwmExtendFrameIntoClientArea(window, ref normalMargins);
+        SetAttribute(window, SystemBackdropType, NoBackdrop);
+        if (SetAccent(window, AcrylicBlurBehind, dark ? 0xC9181311U : 0xA0FFFFFFU)) return true;
         var margins = new Margins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
         return DwmExtendFrameIntoClientArea(window, ref margins) >= 0
             && SetAttribute(window, SystemBackdropType, DesktopAcrylicBackdrop) >= 0;
     }
 
+    private static bool SetAccent(IntPtr window, int state, uint tint)
+    {
+        var policy = new AccentPolicy { State = state, Tint = tint };
+        int size = Marshal.SizeOf(policy);
+        IntPtr data = Marshal.AllocHGlobal(size);
+        try
+        {
+            Marshal.StructureToPtr(policy, data, false);
+            var attribute = new CompositionAttribute { Attribute = AccentPolicyAttribute, Data = data, Size = new IntPtr(size) };
+            return SetWindowCompositionAttribute(window, ref attribute);
+        }
+        catch (EntryPointNotFoundException) { return false; }
+        finally { Marshal.FreeHGlobal(data); }
+    }
+
     internal static void Disable(IntPtr window)
     {
         var margins = new Margins();
+        SetAccent(window, 0, 0);
         SetAttribute(window, SystemBackdropType, NoBackdrop);
         DwmExtendFrameIntoClientArea(window, ref margins);
     }

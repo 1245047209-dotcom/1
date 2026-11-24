@@ -41,8 +41,8 @@ def _asset(device):
 
 def make_snapshot(panel):
     """Report the same device, battery, and status data used by the Tk panel."""
-    from device_sheet import sheet_values
-    from my_devices import BATTERY_PARTS, KEYBOARD_TITLE, Reading, connection_text, product_kind
+    from device_sheet import format_sheet_values
+    from my_devices import BATTERY_PARTS, KEYBOARD_TITLE, Reading, product_kind
 
     entries = panel.device_entries()
     ring_entries = list(panel.ring_entries(entries))
@@ -56,7 +56,7 @@ def make_snapshot(panel):
     for key, device in entries:
         reading = panel.readings.get(key) or Reading(device.label if device else KEYBOARD_TITLE, "正在读取…")
         styles = panel.reading_styles(key, reading)
-        detail = sheet_values(panel, key)
+        detail = format_sheet_values(panel, key, device, reading, styles)
         detail_rows = {name: value for name, _label, value in detail["rows"]}
         component_values = (reading.components or {}) if not reading.error else {}
         kinds = product_kind(device)
@@ -76,11 +76,11 @@ def make_snapshot(panel):
         }
         devices.append({"id": key, "name": detail["title"],
                         "kind": "audio" if kinds == "beats-studio-buds" else kinds or "usb",
-                        "status": styles["row_sub"]["text"], "connection": connection_text(device),
+                        "status": styles["row_sub"]["text"], "connection": detail_rows["connection"],
                         "power": styles["power"]["text"], "low": detail["low"],
                         "asset": _asset(device), "details": details})
 
-    header = panel.header_styles()
+    header = panel.header_styles(entries)
     return {"type": "snapshot", "theme": "dark" if panel.appearance.dark else "light",
             "glass": panel.glass_enabled, "summary": header["summary"]["text"],
             "summaryLow": any(device["low"] for device in devices),
@@ -205,7 +205,10 @@ class NativePanel:
             if message.get("action") == "close":
                 self.panel.close()
                 return
-            self._dispatch(message)
+            try:
+                self._dispatch(message)
+            except Exception as error:
+                self.panel.root.report_callback_exception(type(error), error, error.__traceback__)
             self._next_snapshot = 0.0
 
         if time.monotonic() >= self._next_snapshot:

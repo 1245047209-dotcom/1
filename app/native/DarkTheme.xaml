@@ -1,6 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <SolidColorBrush x:Key="ClientTintBrush" Color="#46101823"/>
+    <SolidColorBrush x:Key="ClientTintBrush" Color="#6410151E"/>
     <SolidColorBrush x:Key="BackdropFallbackBrush" Color="#151E29"/>
     <SolidColorBrush x:Key="TextBrush" Color="#F7FAFF"/>
     <SolidColorBrush x:Key="MutedTextBrush" Color="#DEE8F4"/>
