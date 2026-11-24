@@ -11,8 +11,10 @@
         <SolidColorBrush x:Key="TextBrush" Color="#101B27"/>
         <SolidColorBrush x:Key="MutedTextBrush" Color="#344557"/>
         <SolidColorBrush x:Key="WarningTextBrush" Color="#AF232B"/>
-        <SolidColorBrush x:Key="CardFillBrush" Color="#48FFFFFF"/>
+        <SolidColorBrush x:Key="CardFillBrush" Color="#D9FFFFFF"/>
         <SolidColorBrush x:Key="CardEdgeBrush" Color="#68FFFFFF"/>
+        <SolidColorBrush x:Key="SoftCardFillBrush" Color="#66F0F4F7"/>
+        <SolidColorBrush x:Key="SoftCardEdgeBrush" Color="#3B8492A3"/>
         <SolidColorBrush x:Key="RingTrackBrush" Color="#B9FFFFFF"/>
         <SolidColorBrush x:Key="HealthyRingBrush" Color="#2DC95B"/>
         <SolidColorBrush x:Key="MediumRingBrush" Color="#D69A13"/>

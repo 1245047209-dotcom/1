@@ -12,10 +12,12 @@ using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Markup;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -33,10 +35,17 @@ internal sealed class NativeWindow
     private readonly JavaScriptSerializer outgoing = new JavaScriptSerializer();
     private readonly StreamWriter writer;
     private readonly int backendPid;
+    private readonly DispatcherTimer cardBackdropTimer;
     private IntPtr hwnd;
     private bool dark;
     private bool glass;
     private bool closing;
+    private bool? cardBackdropTheme;
+    private bool cardSamplePending;
+    private int cardSampleGeneration;
+    private double cardBackdropBlend;
+    private SolidColorBrush adaptiveCardFill;
+    private SolidColorBrush adaptiveCardEdge;
     private Window detailWindow;
     private StackPanel detailContent;
     private string detailId;
@@ -55,9 +64,20 @@ internal sealed class NativeWindow
 
         darkTheme = ReadResource<ResourceDictionary>("DarkTheme.xaml");
         foreach (object key in darkTheme.Keys)
-            lightTheme.Add(key, window.Resources[key]);
+            if (window.Resources.Contains(key)) lightTheme.Add(key, window.Resources[key]);
         SetTheme(startDark);
         window.SetResourceReference(Control.BackgroundProperty, "BackdropFallbackBrush");
+        cardBackdropTimer = new DispatcherTimer(DispatcherPriority.Background, window.Dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(120)
+        };
+        cardBackdropTimer.Tick += SampleCardBackdrop;
+        window.SizeChanged += delegate { InvalidateCardSample(); };
+        window.StateChanged += delegate
+        {
+            InvalidateCardSample();
+            UpdateCardBackdropTimer();
+        };
 
         refreshButton = Find<Button>("RefreshButton");
         deviceList = Find<ListBox>("DeviceList");
@@ -81,6 +101,7 @@ internal sealed class NativeWindow
         window.Closed += delegate
         {
             closing = true;
+            cardBackdropTimer.Stop();
             SendAction("close");
         };
     }
@@ -209,7 +230,7 @@ internal sealed class NativeWindow
     {
         if (nextDark == dark) return;
         dark = nextDark;
-        foreach (object key in darkTheme.Keys)
+        foreach (object key in lightTheme.Keys)
             window.Resources[key] = dark ? darkTheme[key] : lightTheme[key];
     }
 
@@ -231,7 +252,11 @@ internal sealed class NativeWindow
         if (displayNative)
         {
             window.SetResourceReference(Control.BackgroundProperty, "ClientTintBrush");
-            DesktopAcrylic.ResetCaption(hwnd);
+            if (dark)
+                DesktopAcrylic.SetCaption(hwnd, ((SolidColorBrush)ResourceBrush("BackdropFallbackBrush")).Color,
+                    ((SolidColorBrush)ResourceBrush("TextBrush")).Color);
+            else
+                DesktopAcrylic.ResetCaption(hwnd);
         }
         else
         {
@@ -240,6 +265,145 @@ internal sealed class NativeWindow
             DesktopAcrylic.SetCaption(hwnd, ((SolidColorBrush)ResourceBrush("BackdropFallbackBrush")).Color,
                 ((SolidColorBrush)ResourceBrush("TextBrush")).Color);
         }
+
+        bool? nextBackdropTheme = displayNative ? (bool?)dark : null;
+        if (cardBackdropTheme != nextBackdropTheme)
+        {
+            cardBackdropTheme = nextBackdropTheme;
+            InvalidateCardSample();
+            SetAdaptiveCards(displayNative);
+        }
+        UpdateCardBackdropTimer();
+    }
+
+    private void UpdateCardBackdropTimer()
+    {
+        if (cardBackdropTheme.HasValue && window.WindowState != WindowState.Minimized)
+            cardBackdropTimer.Start();
+        else
+            cardBackdropTimer.Stop();
+    }
+
+    private void InvalidateCardSample()
+    {
+        cardSampleGeneration++;
+    }
+
+    private void SampleCardBackdrop(object sender, EventArgs args)
+    {
+        var content = (FrameworkElement)window.Content;
+        if (cardSamplePending || !window.IsVisible || !content.IsLoaded || content.ActualHeight <= 0)
+            return;
+
+        // Sample the blank gutters inside the outer grid's 14-DIP side margins.
+        // These points stay outside the cards, buttons and scrollbar when resized.
+        var points = new Point[6];
+        for (int row = 0; row < 3; row++)
+        {
+            double y = content.ActualHeight * (row + 1) / 4;
+            points[row * 2] = content.PointToScreen(new Point(-7, y));
+            points[row * 2 + 1] = content.PointToScreen(new Point(content.ActualWidth + 7, y));
+        }
+        int generation = cardSampleGeneration;
+        var dispatcher = window.Dispatcher;
+        var handle = hwnd;
+        cardSamplePending = true;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            double? brightness = WindowBackdropBrightness.Read(handle, points);
+            if (dispatcher.HasShutdownStarted) return;
+            dispatcher.BeginInvoke(new Action(delegate
+            {
+                cardSamplePending = false;
+                if (!closing && cardBackdropTimer.IsEnabled && generation == cardSampleGeneration)
+                    UpdateCardBackdropBrightness(brightness);
+            }), DispatcherPriority.Background);
+        });
+    }
+
+    private void SetAdaptiveCards(bool enabled)
+    {
+        if (adaptiveCardFill != null)
+        {
+            adaptiveCardFill.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            adaptiveCardEdge.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            adaptiveCardFill = adaptiveCardEdge = null;
+        }
+        if (!enabled)
+        {
+            window.Resources["CardFillBrush"] = ThemeCardBrush("CardFillBrush");
+            window.Resources["CardEdgeBrush"] = ThemeCardBrush("CardEdgeBrush");
+            return;
+        }
+        // Dark uses its original card on dim backdrops. Light starts with its soft card.
+        adaptiveCardFill = CreateAdaptiveBrush(DimCardBrush("CardFillBrush"));
+        adaptiveCardEdge = CreateAdaptiveBrush(DimCardBrush("CardEdgeBrush"));
+        window.Resources["CardFillBrush"] = adaptiveCardFill;
+        window.Resources["CardEdgeBrush"] = adaptiveCardEdge;
+        cardBackdropBlend = 0.0;
+    }
+
+    private SolidColorBrush CreateAdaptiveBrush(SolidColorBrush source)
+    {
+        var brush = source.Clone();
+        // WPF freezes plain resource brushes. Keep this copy animatable while
+        // retaining the theme brush's opacity.
+        BindingOperations.SetBinding(brush, Brush.OpacityProperty, new Binding
+        {
+            Source = source,
+            Path = new PropertyPath(Brush.OpacityProperty),
+            Mode = BindingMode.OneWay
+        });
+        return brush;
+    }
+
+    private void UpdateCardBackdropBrightness(double? brightness)
+    {
+        if (!brightness.HasValue) return;
+        // Keep the established light mapping. Dark acrylic stays at its base
+        // palette in dim scenes and blends to the brighter rim on bright scenes.
+        double scaled = dark ? (brightness.Value - 33.0) / 13.0 : (Math.Floor(brightness.Value) - 190) / 45.0;
+        double blend = Math.Max(0.0, Math.Min(1.0, scaled));
+        blend = blend * blend * (3.0 - 2.0 * blend);
+        if (blend == cardBackdropBlend || (blend > 0.0 && blend < 1.0 && Math.Abs(blend - cardBackdropBlend) < 0.018))
+            return;
+        cardBackdropBlend = blend;
+        AnimateBrush(adaptiveCardFill, CardColor("CardFillBrush", blend));
+        AnimateBrush(adaptiveCardEdge, CardColor("CardEdgeBrush", blend));
+    }
+
+    private SolidColorBrush ThemeCardBrush(string key)
+    {
+        return (SolidColorBrush)(dark ? darkTheme[key] : lightTheme[key]);
+    }
+
+    private SolidColorBrush DimCardBrush(string key)
+    {
+        return dark ? ThemeCardBrush(key) : (SolidColorBrush)window.Resources["Soft" + key];
+    }
+
+    private Color CardColor(string key, double blend)
+    {
+        Color dim = DimCardBrush(key).Color;
+        Color bright = (dark ? (SolidColorBrush)darkTheme["Bright" + key] : ThemeCardBrush(key)).Color;
+        return Color.FromArgb(BlendChannel(dim.A, bright.A, blend), BlendChannel(dim.R, bright.R, blend),
+            BlendChannel(dim.G, bright.G, blend), BlendChannel(dim.B, bright.B, blend));
+    }
+
+    private static byte BlendChannel(byte start, byte end, double blend)
+    {
+        return (byte)Math.Round(start + (end - start) * blend);
+    }
+
+    private static void AnimateBrush(SolidColorBrush brush, Color target)
+    {
+        Color displayed = brush.Color;
+        var fade = new ColorAnimation(displayed, target, new Duration(TimeSpan.FromMilliseconds(320)))
+        {
+            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+            FillBehavior = FillBehavior.HoldEnd
+        };
+        brush.BeginAnimation(SolidColorBrush.ColorProperty, fade, HandoffBehavior.SnapshotAndReplace);
     }
 
     private void OnKeyDown(object sender, KeyEventArgs args)
@@ -441,6 +605,7 @@ internal static class DesktopAcrylic
     private const int DefaultColor = -1;
     private const int AccentPolicyAttribute = 19;
     private const int AcrylicBlurBehind = 4;
+    private const uint DarkAcrylicTint = 0xBF22180FU; // 75% dark tint in ABGR; the client also has a tint layer.
 
     private static int SetAttribute(IntPtr window, int attribute, int value)
     {
@@ -464,7 +629,7 @@ internal static class DesktopAcrylic
         var normalMargins = new Margins();
         DwmExtendFrameIntoClientArea(window, ref normalMargins);
         SetAttribute(window, SystemBackdropType, NoBackdrop);
-        if (SetAccent(window, AcrylicBlurBehind, dark ? 0xC9181311U : 0xA0FFFFFFU)) return true;
+        if (SetAccent(window, AcrylicBlurBehind, dark ? DarkAcrylicTint : 0xA0FFFFFFU)) return true;
         var margins = new Margins { Left = -1, Right = -1, Top = -1, Bottom = -1 };
         return DwmExtendFrameIntoClientArea(window, ref margins) >= 0
             && SetAttribute(window, SystemBackdropType, DesktopAcrylicBackdrop) >= 0;
@@ -503,6 +668,48 @@ internal static class DesktopAcrylic
     {
         SetAttribute(window, CaptionColor, fill.R | fill.G << 8 | fill.B << 16);
         SetAttribute(window, TextColor, text.R | text.G << 8 | text.B << 16);
+    }
+}
+
+internal static class WindowBackdropBrightness
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ScreenPoint
+    {
+        public int X, Y;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(ScreenPoint point);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetDC(IntPtr window);
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+    [DllImport("gdi32.dll")]
+    private static extern uint GetPixel(IntPtr dc, int x, int y);
+
+    internal static double? Read(IntPtr window, Point[] points)
+    {
+        IntPtr dc = GetDC(IntPtr.Zero);
+        if (dc == IntPtr.Zero) return null;
+        try
+        {
+            int sum = 0, count = 0;
+            foreach (var point in points)
+            {
+                var pixelPoint = new ScreenPoint { X = (int)Math.Round(point.X), Y = (int)Math.Round(point.Y) };
+                // The compositor has already blurred these pixels. Ignore any point
+                // where another window is in front of Nexus or the point is off-screen.
+                if (WindowFromPoint(pixelPoint) != window) continue;
+                uint pixel = GetPixel(dc, pixelPoint.X, pixelPoint.Y);
+                if (pixel == UInt32.MaxValue) continue;
+                int r = (byte)pixel, g = (byte)(pixel >> 8), b = (byte)(pixel >> 16);
+                sum += 2126 * r + 7152 * g + 722 * b;
+                count++;
+            }
+            return count >= 4 ? (double?)(sum / (10000.0 * count)) : null;
+        }
+        finally { ReleaseDC(IntPtr.Zero, dc); }
     }
 }
 
