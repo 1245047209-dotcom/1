@@ -28,6 +28,24 @@
         <SolidColorBrush x:Key="IconButtonTextBrush" Color="#067BDD"/>
         <SolidColorBrush x:Key="RowHoverBrush" Color="#38F8FCFF"/>
         <SolidColorBrush x:Key="FocusBrush" Color="#C80666CA"/>
+        <LinearGradientBrush x:Key="DarkDeviceRowHoverBrush" StartPoint="0,0" EndPoint="1,0">
+            <GradientStop Color="#7282A2C8" Offset="0"/>
+            <GradientStop Color="#3B748EAF" Offset="0.64"/>
+            <GradientStop Color="#23748EAF" Offset="1"/>
+        </LinearGradientBrush>
+        <SolidColorBrush x:Key="DarkDeviceRowMarkerBrush" Color="#DBA9C8EE"/>
+        <Style x:Key="DarkDeviceRowFocusVisual" TargetType="Control">
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Control">
+                        <Border Width="2" Height="22" CornerRadius="1" Margin="6,0,0,0"
+                                HorizontalAlignment="Left" VerticalAlignment="Center"
+                                Background="{StaticResource DarkDeviceRowMarkerBrush}"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
         <Style x:Key="Subtle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11"/>
@@ -113,6 +131,53 @@
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
                                 <Setter TargetName="RowSurface" Property="BorderBrush" Value="{DynamicResource FocusBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="DarkDeviceRow" TargetType="ListBoxItem" BasedOn="{StaticResource DeviceRow}">
+            <Setter Property="FocusVisualStyle" Value="{StaticResource DarkDeviceRowFocusVisual}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Grid x:Name="RowSurface" Background="{TemplateBinding Background}">
+                            <Border x:Name="HoverSurface" Background="{StaticResource DarkDeviceRowHoverBrush}"
+                                    Visibility="Collapsed" IsHitTestVisible="False">
+                                <Border.OpacityMask>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0.18,0" SpreadMethod="Pad">
+                                        <LinearGradientBrush.RelativeTransform>
+                                            <TranslateTransform X="-0.18"/>
+                                        </LinearGradientBrush.RelativeTransform>
+                                        <GradientStop Color="#FF000000" Offset="0"/>
+                                        <GradientStop Color="#00000000" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.OpacityMask>
+                            </Border>
+                            <Border x:Name="HoverMarker" Width="2" Height="22" CornerRadius="1"
+                                    Margin="6,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                    Background="{StaticResource DarkDeviceRowMarkerBrush}"
+                                    Visibility="Collapsed" IsHitTestVisible="False"/>
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Margin="3,1"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="HoverSurface" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="HoverMarker" Property="Visibility" Value="Visible"/>
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard Name="RevealDarkDeviceRowHover" HandoffBehavior="SnapshotAndReplace">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="HoverSurface"
+                                                             Storyboard.TargetProperty="(UIElement.OpacityMask).(Brush.RelativeTransform).(TranslateTransform.X)"
+                                                             From="-0.18" To="1" Duration="0:0:0.28" DecelerationRatio="0.25"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <RemoveStoryboard BeginStoryboardName="RevealDarkDeviceRowHover"/>
+                                </Trigger.ExitActions>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -218,7 +283,7 @@
 
                 <TextBlock Text="我的设备" Style="{StaticResource Subtle}" Margin="12,17,0,8"/>
                 <Border Style="{StaticResource Card}" CornerRadius="11">
-                    <Grid>
+                    <Grid x:Name="DeviceListSurface">
                         <ListBox x:Name="DeviceList" ItemsSource="{Binding Devices}" AlternationCount="{Binding Devices.Count}"
                                  ItemContainerStyle="{StaticResource DeviceRow}"
                                  BorderThickness="0" Padding="2" Background="Transparent" Foreground="{DynamicResource TextBrush}"

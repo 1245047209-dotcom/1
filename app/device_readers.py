@@ -81,7 +81,7 @@ def _read_keyboard(interfaces: list[hw.HidInterface]) -> Reading:
     return reading
 
 
-@shared_reading("f87pro-battery-v1")
+@shared_reading("f87pro-battery-v2")
 def _read_f87_interface(iface):
     reading = Reading(KEYBOARD_TITLE, f"{iface.vid_pid} · 2.4G 无线")
     from aula_catalog import match_name

@@ -4,7 +4,8 @@ import queue
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from device_readers import Reading
+from battery import _parse_aula_battery
+from device_readers import Reading, _read_f87_interface, stamp_observation
 from my_devices import NexusPanel
 from native_panel import NativePanel, make_snapshot
 from reading_ui import ReadingTimes
@@ -80,6 +81,46 @@ class IndependentPanelTests(unittest.TestCase):
 
 
 class NativeBridgeTests(unittest.TestCase):
+    @staticmethod
+    def f87_report(level, state):
+        packet = bytearray(20)
+        packet[:7] = bytes((0x13, 0x4A, 1, 0, 2, level, state))
+        packet[19] = sum(packet[:19]) & 0xFF
+        return bytes(packet)
+
+    def test_f87_reports_both_the_percentage_and_charging(self):
+        report = self.f87_report(8, 0x10)
+        interface = SimpleNamespace(vid_pid="3554:FA09", product="AULA F87 Pro")
+        with patch("aula_protocols.identify_interface", return_value={"key": "f87pro"}), \
+                patch("device_readers.bt.strategy_aula_f87", return_value=_parse_aula_battery(report)):
+            reading = stamp_observation(_read_f87_interface.__wrapped__(interface))
+        panel = NexusPanel.__new__(NexusPanel)
+        panel.saved_devices = []
+        panel.readings = {DEFAULT_DEVICE_ID: reading}
+        panel.reading_times = ReadingTimes()
+        panel.appearance, panel.glass_enabled, panel.busy = SimpleNamespace(dark=False), True, False
+
+        snapshot = make_snapshot(panel)
+        ring, = snapshot["rings"]
+        device, = snapshot["devices"]
+        self.assertEqual(ring["level"], 8)
+        self.assertTrue(ring["charging"])
+        self.assertEqual(device["details"]["level"], "8%")
+        self.assertEqual(device["power"], "正在充电")
+        self.assertIn({"label": "续航", "value": "充电中"}, device["details"]["rows"])
+        self.assertFalse(snapshot["summaryLow"])
+
+    def test_f87_charging_placeholder_does_not_hide_a_valid_discharging_level(self):
+        charging = _parse_aula_battery(self.f87_report(100, 0x10))
+        self.assertTrue(charging.ok)
+        self.assertEqual(charging.status, "charging")
+        self.assertEqual(charging.raw_level, 100)
+        self.assertIsNone(charging.level)
+        for level in (0, 100):
+            with self.subTest(level=level):
+                result = _parse_aula_battery(self.f87_report(level, 0x01))
+                self.assertEqual(result.level, level)
+
     def test_action_failure_does_not_stop_other_actions_or_polling(self):
         error = RuntimeError("dialog unavailable")
         panel = SimpleNamespace(root=Mock(), open_settings=Mock(side_effect=error), refresh=Mock())

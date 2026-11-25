@@ -368,9 +368,11 @@ def _parse_aula_battery(report: bytes) -> Optional[BatteryResult]:
     if state not in (0x01, 0x10) or raw > 100:
         return None
     charging = state == 0x10
-    notice = "充电时设备不提供实际百分比" if charging else ""
+    # Some F87 Pro firmware always reports 100 while plugged in.
+    placeholder = charging and raw == 100
+    notice = "充电时的 100% 可能是固件占位值" if placeholder else ""
     return BatteryResult(
-        ok=True, level=None if charging else raw, raw_level=raw,
+        ok=True, level=None if placeholder else raw, raw_level=raw,
         status="charging" if charging else "discharging", source="狼蛛 2.4G 电量协议",
         detail=f"Report 0x13，命令 0x4A，状态 0x{state:02X}" + (f"；{notice}" if notice else ""),
         raw=report, extra={"notice": notice},

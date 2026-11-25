@@ -27,6 +27,7 @@ internal sealed class NativeWindow
     private const string PersonalizeKey = @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
     private readonly Window window;
     private readonly ListBox deviceList;
+    private readonly Grid deviceListSurface;
     private readonly Button refreshButton;
     private readonly ResourceDictionary darkTheme;
     private readonly Dictionary<object, object> lightTheme = new Dictionary<object, object>();
@@ -65,6 +66,9 @@ internal sealed class NativeWindow
         darkTheme = ReadResource<ResourceDictionary>("DarkTheme.xaml");
         foreach (object key in darkTheme.Keys)
             if (window.Resources.Contains(key)) lightTheme.Add(key, window.Resources[key]);
+        deviceList = Find<ListBox>("DeviceList");
+        deviceListSurface = Find<Grid>("DeviceListSurface");
+        deviceListSurface.SizeChanged += delegate { UpdateDeviceListClip(); };
         SetTheme(startDark);
         window.SetResourceReference(Control.BackgroundProperty, "BackdropFallbackBrush");
         cardBackdropTimer = new DispatcherTimer(DispatcherPriority.Background, window.Dispatcher)
@@ -80,7 +84,6 @@ internal sealed class NativeWindow
         };
 
         refreshButton = Find<Button>("RefreshButton");
-        deviceList = Find<ListBox>("DeviceList");
         refreshButton.Click += delegate { SendAction("refresh"); };
         Find<Button>("AddButton").Click += delegate { SendAction("add"); };
         Find<Button>("SettingsButton").Click += delegate { SendAction("settings"); };
@@ -232,6 +235,24 @@ internal sealed class NativeWindow
         dark = nextDark;
         foreach (object key in lightTheme.Keys)
             window.Resources[key] = dark ? darkTheme[key] : lightTheme[key];
+        deviceList.SetResourceReference(ItemsControl.ItemContainerStyleProperty, dark ? "DarkDeviceRow" : "DeviceRow");
+        deviceList.Padding = new Thickness(dark ? 0 : 2);
+        UpdateDeviceListClip();
+    }
+
+    private void UpdateDeviceListClip()
+    {
+        if (!dark)
+        {
+            deviceListSurface.Clip = null;
+            return;
+        }
+        var frame = (Border)deviceListSurface.Parent;
+        // WPF measures the corner radius along the center of the border stroke.
+        double radius = Math.Max(0, frame.CornerRadius.TopLeft - frame.BorderThickness.Left / 2);
+        var clip = new RectangleGeometry(new Rect(deviceListSurface.RenderSize), radius, radius);
+        clip.Freeze();
+        deviceListSurface.Clip = clip;
     }
 
     private Brush ResourceBrush(string key)
