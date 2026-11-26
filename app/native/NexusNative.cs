@@ -5,7 +5,9 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Runtime;
 using System.Runtime.InteropServices;
+using System.Security;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
@@ -25,11 +27,18 @@ using Microsoft.Win32;
 internal sealed class NativeWindow
 {
     private const string PersonalizeKey = @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+    private const string WarmWindowProperty = "NexusBatteryCenter.WarmUI";
+    private const string WarmActivationMessage = "NexusBatteryCenter.ActivateWarmUI";
+    private const int WmSystemCommand = 0x0112;
+    private const int WmNonClientDestroy = 0x0082;
+    private const long ScClose = 0xF060;
     private readonly Window window;
     private readonly ListBox deviceList;
     private readonly Grid deviceListSurface;
     private readonly Button refreshButton;
     private readonly ResourceDictionary darkTheme;
+    private readonly FontFamily systemFontFamily;
+    private readonly FontWeight systemFontWeight;
     private readonly Dictionary<object, object> lightTheme = new Dictionary<object, object>();
     private readonly PanelView view = new PanelView();
     private readonly Artwork artwork = new Artwork();
@@ -37,10 +46,14 @@ internal sealed class NativeWindow
     private readonly StreamWriter writer;
     private readonly int backendPid;
     private readonly DispatcherTimer cardBackdropTimer;
+    private readonly DispatcherTimer warmIdleTimer;
+    private readonly HwndSourceHook warmWindowHook;
     private IntPtr hwnd;
     private bool dark;
     private bool glass;
     private bool closing;
+    private bool warmHidden;
+    private uint warmActivation;
     private bool? cardBackdropTheme;
     private bool cardSamplePending;
     private int cardSampleGeneration;
@@ -50,13 +63,17 @@ internal sealed class NativeWindow
     private Window detailWindow;
     private StackPanel detailContent;
     private string detailId;
+    private string fontChoice;
 
-    private NativeWindow(StreamWriter writer, int backendPid, bool startDark, bool startGlass)
+    private NativeWindow(StreamWriter writer, int backendPid, bool startDark, bool startGlass, string startFont, bool keepWarm)
     {
         this.writer = writer;
         this.backendPid = backendPid;
         glass = startGlass;
         window = ReadResource<Window>("NexusWindow.xaml");
+        systemFontFamily = window.FontFamily;
+        systemFontWeight = window.FontWeight;
+        SetFont(startFont);
         window.Title = "Nexus 外设电量中心";
         window.DataContext = view;
         TextOptions.SetTextRenderingMode(window, TextRenderingMode.Grayscale);
@@ -76,6 +93,16 @@ internal sealed class NativeWindow
             Interval = TimeSpan.FromMilliseconds(120)
         };
         cardBackdropTimer.Tick += SampleCardBackdrop;
+        if (keepWarm)
+        {
+            // HwndSource holds hooks weakly, so retain the delegate for the window lifetime.
+            warmWindowHook = WarmWindowHook;
+            warmIdleTimer = new DispatcherTimer(DispatcherPriority.Background, window.Dispatcher)
+            {
+                Interval = TimeSpan.FromMinutes(3)
+            };
+            warmIdleTimer.Tick += delegate { if (warmHidden) window.Close(); };
+        }
         window.SizeChanged += delegate { InvalidateCardSample(); };
         window.StateChanged += delegate
         {
@@ -94,7 +121,17 @@ internal sealed class NativeWindow
         window.SourceInitialized += delegate
         {
             hwnd = new WindowInteropHelper(window).Handle;
-            HwndSource.FromHwnd(hwnd).CompositionTarget.BackgroundColor = Colors.Transparent;
+            HwndSource source = HwndSource.FromHwnd(hwnd);
+            source.CompositionTarget.BackgroundColor = Colors.Transparent;
+            if (keepWarm)
+            {
+                uint activation = RegisterWindowMessage(WarmActivationMessage);
+                if (activation != 0 && SetProp(hwnd, WarmWindowProperty, new IntPtr(1)))
+                {
+                    warmActivation = activation;
+                    source.AddHook(warmWindowHook);
+                }
+            }
             RefreshBackdrop();
             // The backend registers the HWND. It does not need the desktop compositor's first frame.
             Send(new { action = "ready", hwnd = hwnd.ToInt64() });
@@ -105,6 +142,7 @@ internal sealed class NativeWindow
         {
             closing = true;
             cardBackdropTimer.Stop();
+            if (warmIdleTimer != null) warmIdleTimer.Stop();
             SendAction("close");
         };
     }
@@ -112,14 +150,45 @@ internal sealed class NativeWindow
     [STAThread]
     internal static int Main(string[] args)
     {
+        StartStartupProfile();
+        return Run(args);
+    }
+
+    private static void StartStartupProfile()
+    {
+        string localData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        if (String.IsNullOrWhiteSpace(localData)) return;
+
+        try
+        {
+            string cache = Path.Combine(localData, "NexusBatteryCenter", "JitProfiles");
+            Directory.CreateDirectory(cache);
+            ProfileOptimization.SetProfileRoot(cache);
+            // A rebuilt frontend needs a new profile because its method identifiers may change.
+            string buildId = typeof(NativeWindow).Module.ModuleVersionId.ToString("N");
+            ProfileOptimization.StartProfile("native-" + buildId + ".profile");
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        catch (ArgumentException) { }
+        catch (NotSupportedException) { }
+        catch (SecurityException) { }
+    }
+
+    private static int Run(string[] args)
+    {
         int backendPid = 0;
         bool startDark = Equals(Registry.GetValue(PersonalizeKey, "AppsUseLightTheme", 1), 0);
         bool startGlass = true;
+        bool keepWarm = false;
+        string startFont = "system";
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--dark") startDark = true;
             if (args[i] == "--light") startDark = false;
             if (args[i] == "--glass-off") startGlass = false;
+            if (args[i] == "--keep-warm") keepWarm = true;
+            if (args[i] == "--font" && i + 1 < args.Length) startFont = args[++i];
             if (args[i] == "--backend-pid" && i + 1 < args.Length) Int32.TryParse(args[++i], out backendPid);
         }
 
@@ -128,7 +197,7 @@ internal sealed class NativeWindow
             using (var writer = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true })
             {
                 var application = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
-                var frontend = new NativeWindow(writer, backendPid, startDark, startGlass);
+                var frontend = new NativeWindow(writer, backendPid, startDark, startGlass, startFont, keepWarm);
                 var reader = new Thread(frontend.ReadMessages) { IsBackground = true, Name = "Nexus device events" };
                 reader.Start();
                 return application.Run(frontend.window);
@@ -158,6 +227,66 @@ internal sealed class NativeWindow
         var element = window.FindName(name) as T;
         if (element == null) throw new InvalidOperationException("Nexus window is missing " + name);
         return element;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint RegisterWindowMessage(string name);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool SetProp(IntPtr window, string name, IntPtr value);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr RemoveProp(IntPtr window, string name);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr window);
+
+    private IntPtr WarmWindowHook(IntPtr handle, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (message == WmNonClientDestroy)
+            RemoveProp(handle, WarmWindowProperty);
+        else if (message == warmActivation)
+        {
+            handled = true;
+            window.Dispatcher.BeginInvoke(new Action(ShowWindow), DispatcherPriority.Normal);
+        }
+        else if (message == WmSystemCommand && (wParam.ToInt64() & 0xFFF0) == ScClose)
+        {
+            // Leave raw WM_CLOSE available to the updater, tray exit and Windows shutdown.
+            handled = true;
+            window.Dispatcher.BeginInvoke(new Action(HideWarmWindow), DispatcherPriority.Normal);
+        }
+        return IntPtr.Zero;
+    }
+
+    private void HideWarmWindow()
+    {
+        if (closing || warmHidden || !window.IsVisible) return;
+        warmHidden = true;
+        if (detailWindow != null) detailWindow.Close();
+        window.Hide();
+        InvalidateCardSample();
+        cardBackdropTimer.Stop();
+        warmIdleTimer.Start();
+        SendAction("hidden");
+    }
+
+    private void ShowWindow()
+    {
+        if (closing) return;
+        bool wasHidden = warmHidden;
+        if (wasHidden)
+        {
+            warmIdleTimer.Stop();
+            warmHidden = false;
+            window.Show();
+            InvalidateCardSample();
+            RefreshBackdrop();
+        }
+        if (warmActivation != 0 && IsIconic(hwnd)) SystemCommands.RestoreWindow(window);
+        else if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+        window.Activate();
+        if (wasHidden) SendAction("shown");
     }
 
     private void ReadMessages()
@@ -198,6 +327,7 @@ internal sealed class NativeWindow
                 bool nextGlass = message.glass ?? true;
                 bool appearanceChanged = nextDark != dark || nextGlass != glass;
                 SetTheme(nextDark);
+                SetFont(message.font);
                 glass = nextGlass;
                 view.Update(message, artwork, ResourceBrush);
                 refreshButton.IsEnabled = !message.refreshing;
@@ -205,13 +335,42 @@ internal sealed class NativeWindow
                 RefreshDetails();
                 break;
             case "show":
-                if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
-                window.Activate();
+                ShowWindow();
                 break;
             case "close":
                 window.Close();
                 break;
         }
+    }
+
+    private void SetFont(string choice)
+    {
+        choice = choice ?? "system";
+        if (choice == fontChoice) return;
+
+        FontFamily family;
+        FontWeight body, emphasis;
+        bool custom = PanelFonts.TryResolve(choice, out family, out body, out emphasis);
+        window.FontFamily = custom ? family : systemFontFamily;
+        window.FontWeight = custom ? body : systemFontWeight;
+        window.Resources["UiStrongWeight"] = custom ? emphasis : FontWeights.SemiBold;
+        window.Resources["UiHeadingWeight"] = custom ? emphasis : FontWeights.Bold;
+        if (custom)
+        {
+            window.Resources["UiTooltipFont"] = window.FontFamily;
+            window.Resources["UiTooltipWeight"] = body;
+        }
+        else
+        {
+            window.Resources.Remove("UiTooltipFont");
+            window.Resources.Remove("UiTooltipWeight");
+        }
+        if (detailWindow != null)
+        {
+            detailWindow.FontFamily = window.FontFamily;
+            detailWindow.FontWeight = window.FontWeight;
+        }
+        fontChoice = choice;
     }
 
     private void SendAction(string action, string id = null)
@@ -265,7 +424,7 @@ internal sealed class NativeWindow
 
     private void RefreshBackdrop()
     {
-        if (hwnd == IntPtr.Zero || closing) return;
+        if (hwnd == IntPtr.Zero || closing || warmHidden) return;
         DesktopAcrylic.SetTheme(hwnd, dark);
         bool effectsEnabled = !Equals(Registry.GetValue(PersonalizeKey, "EnableTransparency", 1), 0);
         bool displayNative = glass && effectsEnabled && !SystemParameters.HighContrast
@@ -299,7 +458,7 @@ internal sealed class NativeWindow
 
     private void UpdateCardBackdropTimer()
     {
-        if (cardBackdropTheme.HasValue && window.WindowState != WindowState.Minimized)
+        if (!warmHidden && cardBackdropTheme.HasValue && window.WindowState != WindowState.Minimized)
             cardBackdropTimer.Start();
         else
             cardBackdropTimer.Stop();
@@ -429,6 +588,12 @@ internal sealed class NativeWindow
 
     private void OnKeyDown(object sender, KeyEventArgs args)
     {
+        if (warmActivation != 0 && args.Key == Key.Q && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            args.Handled = true;
+            window.Close();
+            return;
+        }
         if (args.Key == Key.F5 || (args.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control))
         {
             if (refreshButton.IsEnabled) SendAction("refresh");
@@ -470,6 +635,11 @@ internal sealed class NativeWindow
         var entry = DeviceAt(args.OriginalSource);
         if (entry == null) return;
         var menu = new ContextMenu { PlacementTarget = deviceList, Placement = PlacementMode.MousePoint };
+        if (window.FontFamily != systemFontFamily)
+        {
+            menu.FontFamily = window.FontFamily;
+            menu.FontWeight = window.FontWeight;
+        }
         var details = new MenuItem { Header = "查看设备信息" };
         details.Click += delegate { OpenDetails(entry); };
         menu.Items.Add(details);
@@ -498,7 +668,7 @@ internal sealed class NativeWindow
             {
                 Owner = window, WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Width = 410, SizeToContent = SizeToContent.Height, MaxHeight = 660, ResizeMode = ResizeMode.NoResize,
-                ShowInTaskbar = false, Icon = window.Icon, FontFamily = window.FontFamily,
+                ShowInTaskbar = false, Icon = window.Icon, FontFamily = window.FontFamily, FontWeight = window.FontWeight,
                 Content = new ScrollViewer { Content = detailContent, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }
             };
             detailWindow.PreviewKeyDown += delegate(object sender, KeyEventArgs args)
@@ -564,7 +734,7 @@ internal sealed class NativeWindow
     private void SetDetailLine(ref int index, string value, double size, bool strong)
     {
         if (String.IsNullOrWhiteSpace(value)) return;
-        FontWeight weight = strong ? FontWeights.SemiBold : FontWeights.Normal;
+        FontWeight weight = strong ? (FontWeight)window.Resources["UiStrongWeight"] : window.FontWeight;
         if (index == detailContent.Children.Count)
         {
             detailContent.Children.Add(new TextBlock { Text = value, FontSize = size,
@@ -578,6 +748,68 @@ internal sealed class NativeWindow
             if (line.FontWeight != weight) line.FontWeight = weight;
         }
         index++;
+    }
+}
+
+internal static class PanelFonts
+{
+    private const string PuHuiTiName = "Alibaba PuHuiTi 2.0";
+    private static readonly string FontDirectory =
+        Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "assets", "fonts"));
+    private static readonly FontFamily LocalPuHuiTi =
+        new FontFamily(new Uri(FontDirectory + Path.DirectorySeparatorChar), "./#" + PuHuiTiName);
+    private static readonly FontFamily InstalledPuHuiTi = new FontFamily(PuHuiTiName);
+    private static readonly string[] Choices =
+    {
+        "alibaba-thin", "alibaba-light", "alibaba-regular", "alibaba-medium", "alibaba-semibold",
+        "alibaba-bold", "alibaba-extrabold", "alibaba-heavy", "alibaba-black"
+    };
+    // WPF represents the Black face's OpenType weight of 1000 as 999.
+    private static readonly int[] Weights = { 250, 300, 400, 500, 600, 700, 800, 900, 999 };
+
+    internal static bool TryResolve(string choice, out FontFamily family, out FontWeight body, out FontWeight emphasis)
+    {
+        family = null;
+        body = emphasis = FontWeights.Normal;
+        int index = Array.IndexOf(Choices, choice);
+        if (index < 0) return false;
+
+        body = FontWeight.FromOpenTypeWeight(Weights[index]);
+        string directory = null;
+        if (Directory.Exists(FontDirectory) && HasTypeface(LocalPuHuiTi, body, FontDirectory))
+        {
+            family = LocalPuHuiTi;
+            directory = FontDirectory;
+        }
+        else if (HasTypeface(InstalledPuHuiTi, body, null))
+        {
+            family = InstalledPuHuiTi;
+        }
+        else return false;
+
+        emphasis = FontWeight.FromOpenTypeWeight(Weights[Math.Min(index + 1, Weights.Length - 1)]);
+        if (emphasis != body && !HasTypeface(family, emphasis, directory)) emphasis = body;
+        return true;
+    }
+
+    private static bool HasTypeface(FontFamily family, FontWeight weight, string directory)
+    {
+        try
+        {
+            GlyphTypeface glyph;
+            var typeface = new Typeface(family, FontStyles.Normal, weight, FontStretches.Normal);
+            if (!typeface.TryGetGlyphTypeface(out glyph) || glyph.Weight != weight || !glyph.FontUri.IsFile)
+                return false;
+            if (directory != null && !String.Equals(Path.GetDirectoryName(glyph.FontUri.LocalPath), directory,
+                                                     StringComparison.OrdinalIgnoreCase))
+                return false;
+            foreach (string name in glyph.FamilyNames.Values)
+                if (String.Equals(name, PuHuiTiName, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+        catch (ArgumentException) { return false; }
     }
 }
 
@@ -738,6 +970,7 @@ public sealed class PanelMessage
 {
     public string type { get; set; }
     public string theme { get; set; }
+    public string font { get; set; }
     public string summary { get; set; }
     public string updated { get; set; }
     public bool summaryLow { get; set; }

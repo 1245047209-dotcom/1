@@ -4,8 +4,6 @@ from collections import deque
 import ctypes
 from ctypes import wintypes
 import json
-import os
-from pathlib import Path
 from queue import Empty, Queue
 import subprocess
 import sys
@@ -13,9 +11,10 @@ from threading import Condition, Thread
 import time
 from tkinter import TclError
 
+from panel_startup import APP_ROOT, launch_native_process
+from ui_fonts import DEFAULT as DEFAULT_UI_FONT
 
-APP_ROOT = Path(__file__).resolve().parent
-PANEL_EXE = APP_ROOT / "native" / "NexusNative.exe"
+
 _ARTWORK = {
     "keyboard": ("assets/optimized/keyboard-small.png", "assets/aula-f87-pro-product.png"),
     "keyboard-v2d": ("assets/aula-f87-pro-v2d-product.png",),
@@ -82,6 +81,7 @@ def make_snapshot(panel):
 
     header = panel.header_styles(entries)
     return {"type": "snapshot", "theme": "dark" if panel.appearance.dark else "light",
+            "font": getattr(panel.appearance, "font_choice", DEFAULT_UI_FONT),
             "glass": panel.glass_enabled, "summary": header["summary"]["text"],
             "summaryLow": any(device["low"] for device in devices),
             "updated": header["summary_time"]["text"].removeprefix(" · "),
@@ -108,6 +108,7 @@ class NativePanel:
         self.hwnd = None
         self._timer = None
         self._closed = False
+        self._hidden = False
         self._incoming = Queue()
         self._condition = Condition()
         self._commands = deque()
@@ -169,12 +170,10 @@ class NativePanel:
     def start(self):
         import tray_common as tc
 
-        snapshot = make_snapshot(self.panel)
         tc.register_ui_handle(self.hwnd)
         self.panel.native_panel = self
         self.panel.root._nexus_native_hwnd = self.hwnd
         self.panel.root.bind("<Destroy>", self._on_destroy, add="+")
-        self._send_snapshot(snapshot)
         self._timer = self.panel.root.after(50, self._tick)
 
     def _send_snapshot(self, snapshot):
@@ -211,7 +210,7 @@ class NativePanel:
                 self.panel.root.report_callback_exception(type(error), error, error.__traceback__)
             self._next_snapshot = 0.0
 
-        if time.monotonic() >= self._next_snapshot:
+        if not getattr(self, "_hidden", False) and time.monotonic() >= self._next_snapshot:
             try:
                 self._send_snapshot(make_snapshot(self.panel))
             except Exception:
@@ -221,7 +220,17 @@ class NativePanel:
 
     def _dispatch(self, message):
         action = message.get("action")
-        if action == "refresh":
+        if action == "hidden":
+            self._hidden = True
+            settings = self.panel.settings_window
+            if settings is not None and settings.winfo_exists():
+                settings.cancel()
+            search = self.panel.receiver_search
+            if search is not None and not search.closed:
+                search.close()
+        elif action == "shown":
+            self._hidden = False
+        elif action == "refresh":
             self.panel.refresh()
         elif action == "settings":
             self.panel.open_settings()
@@ -243,7 +252,6 @@ class NativePanel:
             self.panel.native_panel = None
             self.panel.root._nexus_native_hwnd = None
             self.panel.place_initial_window()
-            self.panel.draw()
             self.panel.root.deiconify()
             tc.register_ui_window(self.panel.root)
 
@@ -279,24 +287,16 @@ class NativePanel:
                 pass
 
 
-def start_native_panel(panel):
-    """Start the installed native window, or let the ordinary Tk main window open."""
-    if sys.platform != "win32" or sys.getwindowsversion().build < 22621 or not PANEL_EXE.is_file():
-        return None
-    command = [str(PANEL_EXE), "--backend-pid", str(os.getpid()),
-               "--dark" if panel.appearance.dark else "--light"]
-    if not panel.glass_enabled:
-        command.append("--glass-off")
-    try:
-        process = subprocess.Popen(command, cwd=APP_ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   encoding="utf-8", errors="replace",
-                                   creationflags=subprocess.CREATE_NO_WINDOW)
-    except OSError as error:
-        if sys.stderr is not None:
-            print("Nexus native startup:", error, file=sys.stderr)
-        return None
+def start_native_panel(panel, process=None):
+    """Attach the Tk backend to a prestarted native process, falling back on failure."""
+    if process is None:
+        process = launch_native_process(dark=panel.appearance.dark, glass=panel.glass_enabled,
+                                        font=panel.appearance.font_choice)
+        if process is None:
+            return None
     native = NativePanel(panel, process)
     try:
+        native._send_snapshot(make_snapshot(panel))
         if native.wait_until_ready():
             native.start()
             return native

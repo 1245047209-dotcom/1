@@ -194,7 +194,7 @@ class DeviceSheet(DialogMetrics):
         self.hero.bind("<Configure>", lambda _e: self.draw_hero())
         self.vars["level"] = tk.StringVar(self.body, values["level"])
         self.level_label = theme.widget(tk.Label, self.body, textvariable=self.vars["level"], bg=theme.SHEET,
-                                        font=(theme.NUM_FONT, -p(40)), bd=0)
+                                        font=theme.font(self.body, -p(40), numeric=True), bd=0)
         self.level_label.pack(pady=(p(4), 0))
         status_line = theme.widget(tk.Frame, self.body, bg=theme.SHEET)
         status_line.pack(pady=(p(2), p(16)))

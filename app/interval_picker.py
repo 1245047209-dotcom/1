@@ -85,7 +85,7 @@ class IntervalPicker(tk.Canvas):
             self.create_line(clock_x, mid_y - self.p(4), clock_x, mid_y, clock_x + self.p(3), mid_y,
                              fill=muted, width=self.p(1.4), capstyle="round", joinstyle="round")
         self.create_text(self.p(32 if self.show_clock else 14), mid_y, text=self.variable.get(),
-                         anchor="w", fill=text, font=(theme.FONT, -self.p(14)))
+                         anchor="w", fill=text, font=theme.font(self, -self.p(14)))
         arrow_x, half_width = width - self.p(16), self.p(4)
         side_y, center_y = (mid_y + 2, mid_y - 2) if expanded else (mid_y - 2, mid_y + 2)
         self.create_line(arrow_x - half_width, side_y, arrow_x, center_y, arrow_x + half_width, side_y,
@@ -103,7 +103,7 @@ class IntervalPicker(tk.Canvas):
             self.plate = tk.PhotoImage(master=self, format="png", data=data)
             self.create_image(1, 1, image=self.plate, anchor="nw")
         self.create_text(width - self.p(27), mid_y, text=self.variable.get(), anchor="e",
-                         fill=text if expanded or self.hovered else muted, font=(theme.FONT, -self.p(14)))
+                         fill=text if expanded or self.hovered else muted, font=theme.font(self, -self.p(14)))
         x, half = width - self.p(15), self.p(3.5)
         for centre, direction in ((mid_y - self.p(4), -1), (mid_y + self.p(4), 1)):
             self.create_line(x - half, centre - direction * half / 2, x, centre + direction * half / 2,
@@ -127,7 +127,7 @@ class IntervalPicker(tk.Canvas):
                          top + self.row_height - 1, self.p(8),
                          fill=theme.blend(surface, text, .10 if index == highlight else .05), outline="")
             popup.create_text(self.p(15), mid_y, text=value, anchor="w",
-                              fill=text, font=(theme.FONT, -self.p(14)))
+                              fill=text, font=theme.font(self, -self.p(14)))
             if selected:
                 check_x = width - self.p(23)
                 popup.create_line(check_x - self.p(4), mid_y, check_x - self.p(1), mid_y + self.p(3),

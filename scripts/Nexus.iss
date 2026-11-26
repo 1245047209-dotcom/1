@@ -42,6 +42,7 @@ Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{group}\Nexus 外设电量中心"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\my_devices.pyw"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\nexus.ico"
+Name: "{group}\Nexus 快速打开"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\my_devices.pyw"" --keep-warm"; WorkingDir: "{app}"; IconFilename: "{app}\assets\nexus.ico"
 Name: "{group}\Nexus 电量托盘"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\tray_app.py"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\nexus.ico"
 Name: "{group}\检查 Nexus 更新"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\my_devices.pyw"" --check-updates"; WorkingDir: "{app}"; IconFilename: "{app}\assets\nexus.ico"
 Name: "{group}\卸载 Nexus"; Filename: "{uninstallexe}"

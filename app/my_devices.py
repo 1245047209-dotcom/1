@@ -2,7 +2,12 @@
 """Nexus 风格的狼蛛 F87 Pro 电量面板。"""
 from __future__ import annotations
 
-import argparse
+from panel_startup import main
+
+if __name__ == "__main__":
+    main()
+    raise SystemExit
+
 import queue
 import threading
 import time
@@ -278,91 +283,36 @@ def component_charging_text(components):
 
 
 class NexusPanel:
-    def __init__(self, root):
+    def __init__(self, root, *, config=None, defer_start=False):
         import tkinter as tk
-        from tkinter import ttk
-        from app_dialogs import Button
-        from refresh_button import RefreshButton
-        from interval_picker import IntervalPicker
 
         self.root = root
-        cfg = tc.load_config()
+        cfg = tc.load_config() if config is None else config
         self.appearance = theme.install(root, cfg.get("theme"))
+        self.appearance.set_font(cfg.get("ui_font"))
         self.appearance.glass_level = theme.glass_value(cfg.get("glass_level", .48))
         theme.style(root, bg=theme.BACKGROUND)
         theme.track_title_bar(root)
         from ui_scale import UIScale
-        from staged_canvas import SceneCanvas
         self.ui = UIScale(root, UI_SCALE)
         root._nexus_ui = self.ui
         root._nexus_panel = self
-        self.canvas = theme.widget(SceneCanvas, root, bg=theme.BACKGROUND, highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True)
-        from ui_motion import DeviceTransition
-        self.transition = DeviceTransition(root, self.reveal_transition, scale=UI_SCALE,
-                                           finished=self.finish_transition,
-                                           gpu_enabled=bool(cfg.get("gpu_animation", True)))
-        self.transition.set_background(self.fade_background())
         from reading_ui import LiveItems, ReadingTimes
-        self.live = LiveItems(self.transition.update_style)
+        self.live = LiveItems()
+        self.canvas = self.transition = self.refresh_button = None
+        self._refresh_state = "idle"
+        self._gpu_animation = bool(cfg.get("gpu_animation", True))
+        self.glass_enabled = bool(cfg.get("glass_backdrop", True))
+        self.device_sheet = None
+        self.sheet_min_height = 0   # logical height an open details sheet needs
+        self.last_refresh_at = None
         self.reading_times = ReadingTimes()
         self.visible_devices = {}
-        brand_path = ASSETS / "nexus-brand.png"
         self.chrome_images = {}
         self.window_icon_photos = [
-            tk.PhotoImage(master=root, file=str(brand_path.parent / f"nexus-window-{size}.png"))
+            tk.PhotoImage(master=root, file=str(ASSETS / f"nexus-window-{size}.png"))
             for size in (16, 32, 48, 256)]
         root.iconphoto(True, *self.window_icon_photos)
-        self.keyboard_photo_large = None
-        self.keyboard_photo_small = None
-        self.keyboard_image_error = ""
-        self.product_png_sources = {}
-        self.load_keyboard_product_image(tk)
-        self.keyboard_v2d_crop = None
-        v2d_path = brand_path.parent / "aula-f87-pro-v2d-product.png"
-        if v2d_path.exists():
-            self._keyboard_v2d_source = tk.PhotoImage(master=root, file=str(v2d_path))
-            # Display the supplied image without its transparent outer margin.
-            # The original PNG is preserved byte-for-byte in assets.
-            self.keyboard_v2d_crop = tk.PhotoImage(master=root, width=543, height=208)
-            root.tk.call(str(self.keyboard_v2d_crop), "copy", str(self._keyboard_v2d_source),
-                         "-from", 137, 174, 680, 382, "-to", 0, 0)
-        self.mouse_crop = None
-        self.g304_crop = None
-        g304_path = brand_path.parent / "logitech-g304-black.png"
-        if g304_path.exists():
-            self._g304_source = tk.PhotoImage(master=root, file=str(g304_path))
-            self.g304_crop = tk.PhotoImage(master=root, width=135, height=237)
-            root.tk.call(str(self.g304_crop), "copy", str(self._g304_source),
-                         "-from", 141, 38, 276, 275, "-to", 0, 0)
-        mouse_path = brand_path.parent / "optimized" / "mouse-crop.png"
-        if mouse_path.exists():
-            self.mouse_crop = tk.PhotoImage(master=root, file=str(mouse_path))
-            self.product_png_sources["mouse"] = mouse_path.read_bytes()
-        elif (brand_path.parent / "logitech-pro-wireless.png").exists():
-            mouse_path = brand_path.parent / "logitech-pro-wireless.png"
-            self.mouse_source = tk.PhotoImage(master=root, file=str(mouse_path))
-            sw, sh = self.mouse_source.width(), self.mouse_source.height()
-            self.mouse_crop = tk.PhotoImage(master=root, width=round(sw * .39), height=round(sh * .98))
-            self.mouse_crop.tk.call(str(self.mouse_crop), "copy", str(self.mouse_source),
-                                    "-from", round(sw * .30), round(sh * .01),
-                                    round(sw * .69), round(sh * .99), "-to", 0, 0)
-        self.beats_crop = None
-        beats_path = brand_path.parent / "optimized" / "beats-crop.png"
-        if beats_path.exists():
-            self.beats_crop = tk.PhotoImage(master=root, file=str(beats_path))
-            self.product_png_sources["beats-studio-buds"] = beats_path.read_bytes()
-        elif (brand_path.parent / "beats-studio-buds-red.png").exists():
-            beats_path = brand_path.parent / "beats-studio-buds-red.png"
-            self.beats_source = tk.PhotoImage(master=root, file=str(beats_path))
-            sw, sh = self.beats_source.width(), self.beats_source.height()
-            self.beats_crop = tk.PhotoImage(master=root, width=round(sw * .80), height=round(sh * .90))
-            self.beats_crop.tk.call(str(self.beats_crop), "copy", str(self.beats_source),
-                                    "-from", round(sw * .10), round(sh * .02),
-                                    round(sw * .90), round(sh * .92), "-to", 0, 0)
-        self.display_image_cache = {}
-        self.display_rgb_cache = {}
-        self.display_photos = []
         self.results: "queue.Queue[tuple]" = queue.Queue()
         self.device_store = DeviceStore()
         self.saved_devices = []
@@ -381,7 +331,8 @@ class NexusPanel:
         self.readings.update({d.id: Reading(d.label, "正在读取") for d in self.saved_devices})
         self.reading = self.readings.get(self.selected_device_id, Reading("暂无设备", ""))
         from aula_discovery import AulaDiscovery
-        self.aula_discovery = AulaDiscovery()
+        self.aula_discovery = AulaDiscovery(autostart=False)
+        self.discovery_after_id = None
         self.discovery_refresh_pending = False
         self.low_battery_notifier = LowBatteryNotifier(
             enabled=lambda: bool(tc.load_config().get("low_battery_alert", True)))
@@ -392,14 +343,45 @@ class NexusPanel:
         self.startup_after_id = None
         self.pump_after_id = None
         self.runtime_after_id = None
-        self.refresh_button = RefreshButton(self.canvas, command=self.refresh, ui=self.ui)
-        theme.style(self.refresh_button, bg=theme.SURFACE)
         self.auto = bool(cfg.get("panel_auto_refresh", True))
         self.interval = int(cfg.get("interval", 60))
         self.after_id = None
         self.settings_window = None
         self.receiver_search = None
         self.theme_choice = tk.StringVar(root, value=theme.MODE_LABELS[self.appearance.mode])
+        root.title(tc.UI_TITLE)
+        self._layout_size = self.ui.px(DEFAULT_WIDTH), 0
+        self._size_limits = self._window_work_area = self._geometry_after_id = None
+        self._positioned = False
+        root.resizable(True, False)
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        self.appearance.on_change = self.apply_theme
+        self.appearance.on_font_change = self.draw
+        if not defer_start:
+            self.draw()
+            self.start_background()
+
+    def _build_tk_overview(self):
+        """Create the fallback view and its expensive resources on its first draw."""
+        import tkinter as tk
+        from interval_picker import IntervalPicker
+        from refresh_button import RefreshButton
+        from staged_canvas import SceneCanvas
+
+        root = self.root
+        self.canvas = theme.widget(SceneCanvas, root, bg=theme.BACKGROUND, highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+        from ui_motion import DeviceTransition
+        self.transition = DeviceTransition(root, self.reveal_transition, scale=UI_SCALE,
+                                           finished=self.finish_transition,
+                                           gpu_enabled=self._gpu_animation)
+        self.transition.set_background(self.fade_background())
+        self.live.after_set = self.transition.update_style
+        self._load_tk_product_images(tk)
+        self.refresh_button = RefreshButton(self.canvas, command=self.refresh, ui=self.ui)
+        theme.style(self.refresh_button, bg=theme.SURFACE)
+        if self._refresh_state != "idle":
+            self.refresh_button.set_state(self._refresh_state)
         self.theme_picker = IntervalPicker(
             self.canvas, root, self.theme_choice, theme.MODE_LABELS.values(),
             scale=self.ui.factor, show_clock=False, command=self.select_theme,
@@ -410,15 +392,11 @@ class NexusPanel:
         self.row_hits = []
         from glass import Backdrop
         self.glass = Backdrop(root, self.ui.native)
-        self.glass_enabled = bool(cfg.get("glass_backdrop", True))
         self.glass_items = []        # [(canvas, item, width px, height px, role, radius px)]
         self.glass_buttons = []
         self._glass_photos = {}
         self._glass_after = None
         self._glass_pending = []
-        self.device_sheet = None
-        self.sheet_min_height = 0   # logical height an open details sheet needs
-        self.last_refresh_at = None
         self._ios_images = {}
         self.overview_canvas = theme.widget(SceneCanvas, self.canvas, bg=theme.BACKGROUND,
                                            highlightthickness=0, yscrollincrement=self.ui.px(24))
@@ -436,30 +414,82 @@ class NexusPanel:
         self.overview_canvas.bind("<MouseWheel>", lambda event: self.overview_canvas.yview_scroll(
             -int(event.delta / 120) * 3, "units") if self.overview_scrollable else None)
         from card_hover import CardHover
-        self.card_hover = CardHover(root, self.overview_canvas, scale=UI_SCALE, assets=brand_path.parent,
+        self.card_hover = CardHover(root, self.overview_canvas, scale=UI_SCALE, assets=ASSETS,
                                    blocked=lambda: self.transition.active)
         self.overview_canvas.bind("<MouseWheel>", lambda _event: self.root.after_idle(self.card_hover.refresh_pointer), add="+")
         self._drag = None
 
-        root.title(tc.UI_TITLE)
-        self._layout_size = self.ui.px(DEFAULT_WIDTH), 0
-        self._size_limits = self._window_work_area = self._geometry_after_id = None
-        self._positioned = False
-        root.resizable(True, False)
         root.bind("<Configure>", self.on_configure)
         root.bind("<Configure>", self.glass_moved, add="+")
-        root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<F5>", self.refresh_shortcut)
         root.bind("<Control-r>", self.refresh_shortcut)
         self.canvas.bind("<ButtonPress-1>", self.start_drag)
         self.canvas.bind("<ButtonRelease-1>", self.end_drag)
         self.canvas.bind("<B1-Motion>", self.drag)
-        self.appearance.on_change = self.apply_theme
-        self.draw()
+
+    def _load_tk_product_images(self, tk):
+        root = self.root
+        self.keyboard_photo_large = None
+        self.keyboard_photo_small = None
+        self.keyboard_image_error = ""
+        self.product_png_sources = {}
+        self.load_keyboard_product_image(tk)
+        self.keyboard_v2d_crop = None
+        v2d_path = ASSETS / "aula-f87-pro-v2d-product.png"
+        if v2d_path.exists():
+            self._keyboard_v2d_source = tk.PhotoImage(master=root, file=str(v2d_path))
+            # Display the supplied image without its transparent outer margin.
+            # The original PNG is preserved byte-for-byte in assets.
+            self.keyboard_v2d_crop = tk.PhotoImage(master=root, width=543, height=208)
+            root.tk.call(str(self.keyboard_v2d_crop), "copy", str(self._keyboard_v2d_source),
+                         "-from", 137, 174, 680, 382, "-to", 0, 0)
+        self.mouse_crop = None
+        self.g304_crop = None
+        g304_path = ASSETS / "logitech-g304-black.png"
+        if g304_path.exists():
+            self._g304_source = tk.PhotoImage(master=root, file=str(g304_path))
+            self.g304_crop = tk.PhotoImage(master=root, width=135, height=237)
+            root.tk.call(str(self.g304_crop), "copy", str(self._g304_source),
+                         "-from", 141, 38, 276, 275, "-to", 0, 0)
+        mouse_path = ASSETS / "optimized" / "mouse-crop.png"
+        if mouse_path.exists():
+            self.mouse_crop = tk.PhotoImage(master=root, file=str(mouse_path))
+            self.product_png_sources["mouse"] = mouse_path.read_bytes()
+        elif (ASSETS / "logitech-pro-wireless.png").exists():
+            mouse_path = ASSETS / "logitech-pro-wireless.png"
+            self.mouse_source = tk.PhotoImage(master=root, file=str(mouse_path))
+            sw, sh = self.mouse_source.width(), self.mouse_source.height()
+            self.mouse_crop = tk.PhotoImage(master=root, width=round(sw * .39), height=round(sh * .98))
+            self.mouse_crop.tk.call(str(self.mouse_crop), "copy", str(self.mouse_source),
+                                    "-from", round(sw * .30), round(sh * .01),
+                                    round(sw * .69), round(sh * .99), "-to", 0, 0)
+        self.beats_crop = None
+        beats_path = ASSETS / "optimized" / "beats-crop.png"
+        if beats_path.exists():
+            self.beats_crop = tk.PhotoImage(master=root, file=str(beats_path))
+            self.product_png_sources["beats-studio-buds"] = beats_path.read_bytes()
+        elif (ASSETS / "beats-studio-buds-red.png").exists():
+            beats_path = ASSETS / "beats-studio-buds-red.png"
+            self.beats_source = tk.PhotoImage(master=root, file=str(beats_path))
+            sw, sh = self.beats_source.width(), self.beats_source.height()
+            self.beats_crop = tk.PhotoImage(master=root, width=round(sw * .80), height=round(sh * .90))
+            self.beats_crop.tk.call(str(self.beats_crop), "copy", str(self.beats_source),
+                                    "-from", round(sw * .10), round(sh * .02),
+                                    round(sw * .90), round(sh * .92), "-to", 0, 0)
+        self.display_image_cache = {}
+        self.display_rgb_cache = {}
+        self.display_photos = []
+
+    def start_background(self):
+        self.discovery_after_id = self.root.after(100, self.start_discovery)
         self.startup_after_id = self.root.after(200, self.refresh)
         self.schedule()
         self.pump_after_id = self.root.after(100, self.pump)
         self.runtime_after_id = self.root.after(1000, self.runtime_tick)
+
+    def start_discovery(self):
+        self.discovery_after_id = None
+        self.aula_discovery.start()
 
     def color(self, swatch):
         return theme.color(getattr(self, "root", None), swatch)
@@ -566,7 +596,14 @@ class NexusPanel:
             self.chrome_images[path] = tk.PhotoImage(master=self.root, file=str(path))
         return self.chrome_images[path]
 
+    def set_gpu_enabled(self, enabled):
+        self._gpu_animation = bool(enabled)
+        if self.transition is not None:
+            self.transition.set_gpu_enabled(self._gpu_animation)
+
     def apply_theme(self):
+        if self.canvas is None:
+            return
         self._glass_photos.clear()
         self.transition.set_background(self.fade_background())
         self.card_hover.reset_assets()
@@ -642,10 +679,15 @@ class NexusPanel:
         self.refresh()
         self.schedule()
 
+    def _set_refresh_state(self, state):
+        self._refresh_state = state
+        if self.refresh_button is not None:
+            self.refresh_button.set_state(state)
+
     def refresh(self):
         if not self.device_entries():
             self.busy = False
-            self.refresh_button.set_state("idle")
+            self._set_refresh_state("idle")
             return False
         if self.busy:
             return False
@@ -663,7 +705,7 @@ class NexusPanel:
             self.refresh_feedback_after_id = None
         self.busy = True
         self.refresh_started = time.monotonic()
-        self.refresh_button.set_state("loading")
+        self._set_refresh_state("loading")
         self.refresh_readings()
         self.refresh_generation += 1
         threading.Thread(target=self.read_worker,
@@ -700,7 +742,7 @@ class NexusPanel:
         self.busy = False
         if success:
             self.last_refresh_at = time.time()
-        self.refresh_button.set_state("success" if success else "error")
+        self._set_refresh_state("success" if success else "error")
         if isinstance(reading, dict) and identity_changed:
             self.draw()
         self.refresh_readings()
@@ -713,7 +755,7 @@ class NexusPanel:
     def clear_refresh_feedback(self):
         self.refresh_feedback_after_id = None
         if not self.busy:
-            self.refresh_button.set_state("idle")
+            self._set_refresh_state("idle")
 
     def sync_reported_models(self):
         changed = False
@@ -757,7 +799,8 @@ class NexusPanel:
             self.receiver_search.close()
         for timer in (self.after_id, self.refresh_result_after_id,
                       self.refresh_feedback_after_id, self.startup_after_id, self.pump_after_id,
-                      self.runtime_after_id, getattr(self, "_geometry_after_id", None)):
+                      self.runtime_after_id, getattr(self, "_geometry_after_id", None),
+                      getattr(self, "discovery_after_id", None)):
             if timer is not None:
                 self.root.after_cancel(timer)
         self.root.destroy()
@@ -1022,12 +1065,15 @@ class NexusPanel:
             canvas.coords(when_item, bounds[2], position[1])
 
     def refresh_readings(self):
-        if not getattr(self, "live", None) or not self.live.bindings:
+        native = getattr(self, "native_panel", None) is not None
+        if not native and (not getattr(self, "live", None) or not self.live.bindings):
             self.draw()
             return
+        if native:
+            self.reading_times.retain(self.readings)
         for key, reading in self.readings.items():
             self.reading_times.observe(key, reading)
-        if self.transition.active:
+        if native or self.transition.active:
             return
         if self.live.apply("header", self.header_styles()):
             self.align_header_time()
@@ -1062,6 +1108,10 @@ class NexusPanel:
         self.resize_to_content(max(self.natural_height(), getattr(self, "sheet_min_height", 0)))
 
     def draw(self):
+        if getattr(self, "native_panel", None) is not None:
+            return  # WPF owns the main overview; the hidden Tk canvas is only a fallback.
+        if self.canvas is None:
+            self._build_tk_overview()
         self.draw_count = getattr(self, "draw_count", 0) + 1
         if self.transition.phase == "prepare":
             self.transition.start()
@@ -1583,7 +1633,7 @@ class NexusPanel:
             self.readings.setdefault(saved.id, Reading(saved.label, "正在读取…"))
         self.reading = self.readings.get(self.selected_device_id, Reading(device.label if device else KEYBOARD_TITLE, "正在检查…"))
         # Ordinary battery readings update in place.
-        if self.root.winfo_viewable():
+        if self.canvas is not None and self.root.winfo_viewable():
             self.card_hover.suspend()
             self.transition.start()
         else:
@@ -1650,54 +1700,3 @@ def cli_once() -> None:
             print(f"{reading.title}: 读取失败 —— {reading.error}")
 
 
-def main(argv=None) -> None:
-    parser = argparse.ArgumentParser(description="狼蛛 F87 Pro 电量面板")
-    parser.add_argument("--once", action="store_true", help="读取一次后退出")
-    parser.add_argument("--install-links", action="store_true", help="重建桌面入口")
-    parser.add_argument("--autostart", choices=["on", "off", "status"],
-                        help="开机自启：on / off / status")
-    parser.add_argument("--check-updates", action="store_true", help="在主窗口内检查软件更新")
-    args = parser.parse_args(argv)
-
-    if args.install_links:
-        result = tc.install_desktop_links()
-        print("桌面入口已处理")
-        print(result)
-        return
-    if args.autostart:
-        if args.autostart == "status":
-            print(tc.autostart_status())
-        else:
-            print("开机自启", "已启用" if tc.set_autostart(args.autostart == "on") else "设置失败")
-        return
-    if args.once:
-        cli_once()
-        return
-
-    with tc.ui_instance() as primary:
-        if not primary:
-            if args.check_updates:
-                from update_ui import request_existing_window
-                request_existing_window()
-            else:
-                tc.focus_ui(wait_timeout=2.0)
-            return
-        import tkinter as tk
-        from update_ui import UpdateManager
-        root = tk.Tk()
-        root.withdraw()
-        panel = NexusPanel(root)
-        panel.updates = UpdateManager(root, on_install=panel.close)
-        panel.updates.start()
-        from native_panel import start_native_panel
-        if start_native_panel(panel) is None:
-            panel.place_initial_window()
-            root.deiconify()
-            tc.register_ui_window(root)
-        if args.check_updates:
-            root.after(50, panel.updates.open)
-        root.mainloop()
-
-
-if __name__ == "__main__":
-    main()

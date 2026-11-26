@@ -1,16 +1,15 @@
 """Nexus color roles and the theme for one Tk application."""
 from __future__ import annotations
 
-import atexit
 import ctypes
 from ctypes import wintypes
-from functools import cache
 from pathlib import Path
 import sys
 import tkinter as tk
 from tkinter import font as tkfont, ttk
 from typing import NamedTuple
 
+from ui_fonts import UIFonts
 
 FONT = "Microsoft YaHei UI"          # ships with Windows and has a real bold
 NUM_FONT = "Segoe UI Semibold"       # percentages; tabular figures
@@ -24,28 +23,21 @@ FALLBACK_GLYPHS = {"add": "+", "settings": "⚙", "refresh": "↻", "more": "⋯
                    "keyboard": "⌨", "mouse": "●", "headphones": "♫", "bluetooth": "ᛒ", "usb": "⇄", "case": "▭",
                    "timer": "◷", "monitor": "▭", "battery": "▮", "speed": "»", "update": "⟳",
                    "check": "✓", "back": "‹", "down": "▾"}
-FONT_PATH = Path(__file__).with_name("assets") / "fonts" / "SourceHanSansCN-Normal.otf"
-
-
-@cache
-def _load_bundled_font():
-    if sys.platform != "win32" or not FONT_PATH.is_file():
-        return
-    gdi = ctypes.WinDLL("gdi32")
-    add_font = gdi.AddFontResourceExW
-    remove_font = gdi.RemoveFontResourceExW
-    add_font.argtypes = remove_font.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p)
-    add_font.restype, remove_font.restype = ctypes.c_int, wintypes.BOOL
-    private = 0x10  # FR_PRIVATE restricts the font to this process.
-    path = str(FONT_PATH)
-    if add_font(path, private, None):
-        atexit.register(remove_font, path, private, None)
-
-
 def configure_fonts(root):
-    # v73-iOS uses system fonts; the bundled Source Han Sans is no longer registered.
+    """Apply the default Windows font to the standalone diagnostics window."""
     for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
         tkfont.nametofont(name, root=root).configure(family=FONT)
+
+
+def font(widget, size, weight="normal", *, numeric=False):
+    appearance = getattr(widget._root(), "_nexus_theme", None)
+    if appearance is None:
+        return (NUM_FONT if numeric else FONT, size, weight)
+    return appearance.fonts.font(size, weight, numeric)
+
+
+def font_for_choice(widget, choice, size, weight="normal"):
+    return widget._root()._nexus_theme.fonts.preview(choice, size, weight)
 
 
 class Color(NamedTuple):
@@ -260,12 +252,26 @@ class Theme:
         self.mode, self.dark, self.timer = None, False, None
         self.glass_level = .48
         self.on_change = None
-        configure_fonts(root)
+        self.on_font_change = None
+        self.fonts = UIFonts(root, FONT, NUM_FONT)
         self.ttk = ttk.Style(root)
         self.native_theme = self.ttk.theme_use()
         root._nexus_theme = self
         root.bind("<Destroy>", self._destroy, add="+")
         self.set_mode(mode)
+
+    @property
+    def font_choices(self):
+        return self.fonts.choices
+
+    @property
+    def font_choice(self):
+        return self.fonts.choice
+
+    def set_font(self, choice):
+        if self.fonts.set_choice(choice) and self.on_font_change is not None:
+            self.on_font_change()
+        return self.font_choice
 
     def set_mode(self, mode):
         self.mode = normalize(mode)

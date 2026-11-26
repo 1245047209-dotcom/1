@@ -150,7 +150,7 @@ class Button(tk.Canvas):
             self.plate = tk.PhotoImage(master=self, format="png", data=data)
             self.create_image(width/2, height/2, image=self.plate)
         self.create_text(width/2, height/2, text=self.text, fill=theme.color(self, label),
-                         font=(theme.FONT, -round(15*self.scale)))
+                         font=theme.font(self, -round(15*self.scale)))
 
 
 class CloseButton(Button):
@@ -213,7 +213,8 @@ class DialogMetrics:
         return round(value*self.scale)
 
     def font(self, size, weight="normal"):
-        return (theme.FONT, -self.p(size), weight)
+        widget = self if isinstance(self, tk.Misc) else getattr(self, "window", None) or self.root
+        return theme.font(widget, -self.p(size), weight)
 
 
 class OverlayDialog(DialogMetrics, tk.Canvas):
@@ -332,7 +333,7 @@ def setting_row(dialog, master, title, description, *, height=53, bg=theme.SURFA
 
 
 class SettingsDialog(DialogMetrics, tk.Toplevel):
-    """iOS-style settings sheet: 取消 / 设置 / 完成, inset-grouped lists, live theme preview."""
+    """iOS-style settings sheet with live appearance previews."""
 
     def __init__(self, panel, manager=None):
         import tray_common as tc
@@ -358,6 +359,12 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
         theme.track_title_bar(self)
         self.original_theme = panel.appearance.mode
         self.theme_mode = self.original_theme
+        self.original_font = panel.appearance.font_choice
+        self.font_choices = panel.appearance.font_choices
+        self.font_selection = tk.StringVar(self, value=self.original_font)
+        self.font_name = tk.StringVar(self, value=self.font_choices[self.original_font])
+        self.font_buttons = {}
+        self.font_checks = {}
         self._committed = False
         self.current_page = None
 
@@ -377,7 +384,11 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
 
         self.inner = theme.widget(tk.Frame, self, bg=theme.BACKGROUND)
         self.inner.pack(fill="both", expand=True)
+        self.save_error = theme.widget(tk.Label, self, bg=theme.BACKGROUND, fg=theme.LOW, font=self.font(12),
+                                       justify="left", anchor="w", bd=0)
+        self.save_error.bind("<Configure>", lambda event: self.save_error.configure(wraplength=event.width))
         self.preferences = theme.widget(tk.Frame, self.inner, bg=theme.BACKGROUND)
+        self.font_page = theme.widget(tk.Frame, self.inner, bg=theme.BACKGROUND)
         self.update_page = theme.widget(tk.Frame, self.inner, bg=theme.BACKGROUND)
         update_group = Group(self.update_page, p=self.p, expand=True)
         update_group.pack(fill="both", expand=True, padx=self.p(16), pady=(self.p(6), self.p(16)))
@@ -394,21 +405,11 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
         self.glass = tk.BooleanVar(self, value=bool(config.get("glass_backdrop", True)))
         self.feedback = tk.StringVar(self)
 
-        scroll_frame = theme.widget(tk.Frame, self.preferences, bg=theme.BACKGROUND)
-        scroll_frame.pack(fill="both", expand=True)
-        self.preferences_canvas = theme.widget(tk.Canvas, scroll_frame, bg=theme.BACKGROUND,
-                                               bd=0, highlightthickness=0, width=1, height=1)
-        self.preferences_canvas.pack(side="left", fill="both", expand=True)
-        from ios_controls import ThinScrollbar
-        self.preferences_scrollbar = ThinScrollbar(scroll_frame, self._scroll_preferences, p=self.p)
-        self.preferences_canvas.configure(yscrollcommand=self._update_preferences_scrollbar,
-                                          yscrollincrement=self.p(15))
-        self.rows = theme.widget(tk.Frame, self.preferences_canvas, bg=theme.BACKGROUND)
-        rows_window = self.preferences_canvas.create_window(0, 0, anchor="nw", window=self.rows)
-        self.preferences_canvas.bind("<Configure>", lambda event: self.preferences_canvas.itemconfigure(rows_window, width=event.width))
-        self.rows.bind("<Configure>", lambda event: self.preferences_canvas.configure(scrollregion=(0, 0, event.width, event.height)))
-        self.bind("<MouseWheel>", self._wheel_preferences, add="+")
-        self.bind("<FocusIn>", self._reveal_preference, add="+")
+        self.page_scrollers = {}
+        self.preferences_canvas, self.rows, self.preferences_scrollbar = self._scrollable_rows(
+            "settings", self.preferences, before_scroll=lambda: self.combo._close())
+        self.bind("<MouseWheel>", self._wheel_rows, add="+")
+        self.bind("<FocusIn>", self._reveal_focused_row, add="+")
 
         # 外观
         body = self._group("外观")
@@ -423,6 +424,7 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
         line = row(self, body, "毛玻璃背景", detail=glass_detail)
         self.glass_switch = Switch(line, self.glass, scale=self.scale)
         self.glass_switch.place(relx=1, rely=.5, anchor="e", x=-self.p(14))
+        self.font_button = link_row(self, body, "界面字体", self.font_name, lambda: self.select_page("fonts"))
         # 刷新
         body = self._group("刷新")
         line = row(self, body, "刷新间隔", icon="timer", swatch=theme.ACCENT)
@@ -490,6 +492,79 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
     def _auto_theme_changed(self):
         self._preview_theme("system" if self.auto_theme.get() else self.effective_theme())
 
+    def _build_font_page(self):
+        from ios_controls import Group, TextButton, row
+
+        self.panel.appearance.fonts.prepare_choices()
+        preview = Group(self.font_page, p=self.p)
+        preview.pack(fill="x", padx=self.p(16), pady=(self.p(6), self.p(12)))
+        theme.widget(tk.Label, preview.body, text="字体预览", bg=theme.SURFACE, fg=theme.MUTED,
+                     font=self.font(12), bd=0).pack(anchor="w", padx=self.p(14), pady=(self.p(10), 0))
+        self.font_sample_title = theme.widget(tk.Label, preview.body, text="设备", bg=theme.SURFACE,
+                                            fg=theme.TEXT, bd=0)
+        self.font_sample_title.pack(anchor="w", padx=self.p(14), pady=(self.p(3), 0))
+        self.font_sample_detail = theme.widget(tk.Label, preview.body, text="AULA F87 Pro  ·  已连接  ·  76%",
+                                             bg=theme.SURFACE, fg=theme.MUTED, bd=0)
+        self.font_sample_detail.pack(anchor="w", padx=self.p(14), pady=(self.p(1), self.p(11)))
+        theme.widget(tk.Label, self.font_page, text="系统字体与阿里巴巴普惠体 2.0", bg=theme.BACKGROUND,
+                     fg=theme.MUTED, font=self.font(12), bd=0).pack(anchor="w", padx=self.p(30),
+                                                                 pady=(0, self.p(6)))
+        if len(self.font_choices) == 1:
+            from webbrowser import open as open_url
+
+            TextButton(self.font_page, "获取阿里巴巴普惠体 2.0",
+                       lambda: open_url("https://www.alibabafonts.com/#/font"),
+                       font=self.font(13)).pack(anchor="w", padx=self.p(26))
+            theme.widget(tk.Label, self.font_page, text="安装所需字重后重新打开 Nexus。", bg=theme.BACKGROUND,
+                         fg=theme.MUTED, font=self.font(12), bd=0).pack(anchor="w", padx=self.p(30), pady=(0, self.p(7)))
+        _, rows, _ = self._scrollable_rows("fonts", self.font_page)
+        choices = Group(rows, p=self.p)
+        choices.pack(fill="x", padx=self.p(16), pady=(0, self.p(16)))
+        glyph, glyph_font = theme.glyph(self, "check")
+        for choice, label in self.font_choices.items():
+            button = row(self, choices.body, label)
+            button.title.configure(font=theme.font_for_choice(self, choice, -self.p(16)))
+            button.configure(takefocus=1, highlightthickness=1, cursor="hand2")
+            theme.style(button, highlightbackground=theme.SURFACE, highlightcolor=theme.FOCUS)
+            check = theme.widget(tk.Label, button, text=glyph, bg=theme.SURFACE, fg=theme.ACCENT,
+                                 font=(glyph_font, -self.p(14)), bd=0)
+            self.font_buttons[choice] = button
+            self.font_checks[choice] = check
+            for target in (button, *button.winfo_children()):
+                target.configure(cursor="hand2")
+                target.bind("<ButtonRelease-1>", lambda _event, key=choice: self._pick_font(key))
+            for name in ("<Return>", "<space>"):
+                button.bind(name, lambda _event, key=choice: self._pick_font(key))
+            button.bind("<Up>", lambda _event, key=choice: self._move_font(key, -1))
+            button.bind("<Down>", lambda _event, key=choice: self._move_font(key, 1))
+            button.bind("<Home>", lambda _event: self._pick_font(next(iter(self.font_choices))))
+            button.bind("<End>", lambda _event: self._pick_font(next(reversed(self.font_choices))))
+        self._refresh_font_preview()
+
+    def _move_font(self, choice, step):
+        keys = tuple(self.font_choices)
+        index = max(0, min(len(keys) - 1, keys.index(choice) + step))
+        return self._pick_font(keys[index])
+
+    def _pick_font(self, choice):
+        self.panel.appearance.set_font(choice)
+        actual = self.panel.appearance.font_choice
+        self.font_selection.set(actual)
+        self.font_name.set(self.font_choices[actual])
+        self._refresh_font_preview()
+        self.font_buttons[choice].focus_set()
+        return "break"
+
+    def _refresh_font_preview(self):
+        choice = self.font_selection.get()
+        self.font_sample_title.configure(font=theme.font_for_choice(self, choice, -self.p(26), "bold"))
+        self.font_sample_detail.configure(font=theme.font_for_choice(self, choice, -self.p(15)))
+        for key, check in self.font_checks.items():
+            if key == choice:
+                check.place(relx=1, x=-self.p(14), rely=.5, anchor="e")
+            else:
+                check.place_forget()
+
     # ---- navigation -----------------------------------------------------------
     def select_page(self, page):
         if page == "appearance":  # the appearance page is now part of the main list
@@ -497,60 +572,90 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
         previous = self.current_page
         if previous == "settings" and page != previous:
             self.combo._close()
+        if page == "fonts" and not self.font_buttons:
+            self._build_font_page()
         self.current_page = page
-        pages = {"settings": self.preferences, "updates": self.update_page}
+        pages = {"settings": self.preferences, "fonts": self.font_page, "updates": self.update_page}
         for name, widget in pages.items():
             if name != page:
                 widget.pack_forget()
         pages[page].pack(fill="both", expand=True)
-        self.header_title.configure(text={"settings": "设置", "updates": "软件更新"}[page])
+        self.header_title.configure(text={"settings": "设置", "fonts": "界面字体", "updates": "软件更新"}[page])
         if page == "settings":
             self.back_button.place_forget()
             self.cancel_button.place(x=self.p(12), rely=.5, anchor="w")
             if previous == "updates":
                 self.update_button.focus_set()
+            elif previous == "fonts":
+                self.font_button.focus_set()
         else:
             self.cancel_button.place_forget()
             self.back_button.place(x=self.p(8), rely=.5, anchor="w")
-            self.back_button.focus_set()
+            target = self.font_buttons[self.font_selection.get()] if page == "fonts" else self.back_button
+            target.focus_set()
 
     def show_updates(self):
         self.select_page("updates")
         self.show()
 
-    def _scroll_preferences(self, *args):
-        self.combo._close()
-        self.preferences_canvas.yview(*args)
+    def _scrollable_rows(self, page_name, page, *, before_scroll=None):
+        from ios_controls import ThinScrollbar
 
-    def _update_preferences_scrollbar(self, first, last):
-        bar = self.preferences_scrollbar
-        bar.set(first, last)
-        fits = float(first) <= 0 and float(last) >= 1
-        if fits and bar.winfo_manager():
-            bar.pack_forget()
-        elif not fits and not bar.winfo_manager():
-            bar.pack(side="right", fill="y", before=self.preferences_canvas)
+        frame = theme.widget(tk.Frame, page, bg=theme.BACKGROUND)
+        frame.pack(fill="both", expand=True)
+        canvas = theme.widget(tk.Canvas, frame, bg=theme.BACKGROUND, bd=0, highlightthickness=0, width=1, height=1)
+        canvas.pack(side="left", fill="both", expand=True)
 
-    def _wheel_preferences(self, event):
-        if event.widget is self.preferences_canvas or str(event.widget).startswith(str(self.rows)):
+        def scroll(*args):
+            if before_scroll:
+                before_scroll()
+            canvas.yview(*args)
+
+        bar = ThinScrollbar(frame, scroll, p=self.p)
+
+        def update_bar(first, last):
+            bar.set(first, last)
+            fits = float(first) <= 0 and float(last) >= 1
+            if fits and bar.winfo_manager():
+                bar.pack_forget()
+            elif not fits and not bar.winfo_manager():
+                bar.pack(side="right", fill="y", before=canvas)
+
+        canvas.configure(yscrollcommand=update_bar, yscrollincrement=self.p(15))
+        rows = theme.widget(tk.Frame, canvas, bg=theme.BACKGROUND)
+        rows_window = canvas.create_window(0, 0, anchor="nw", window=rows)
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(rows_window, width=event.width))
+        rows.bind("<Configure>", lambda event: canvas.configure(scrollregion=(0, 0, event.width, event.height)))
+        self.page_scrollers[page_name] = (canvas, rows, scroll)
+        return canvas, rows, bar
+
+    def _wheel_rows(self, event):
+        scroller = self.page_scrollers.get(self.current_page)
+        if scroller is None:
+            return
+        canvas, rows, scroll = scroller
+        if event.widget is canvas or str(event.widget).startswith(f"{rows}."):
             steps = int(event.delta / 120)
             if steps:
-                self._scroll_preferences("scroll", -steps * 2, "units")
+                scroll("scroll", -steps * 2, "units")
                 return "break"
 
-    def _reveal_preference(self, event):
-        widget = event.widget
-        if not str(widget).startswith(f"{self.rows}."):
+    def _reveal_focused_row(self, event):
+        scroller = self.page_scrollers.get(self.current_page)
+        if scroller is None:
             return
-        canvas = self.preferences_canvas
-        y = widget.winfo_rooty() - self.rows.winfo_rooty()
+        canvas, rows, _ = scroller
+        widget = event.widget
+        if not str(widget).startswith(f"{rows}."):
+            return
+        y = widget.winfo_rooty() - rows.winfo_rooty()
         bottom = y + widget.winfo_height()
         visible_top = canvas.canvasy(0)
         height = canvas.winfo_height()
         if y < visible_top:
-            canvas.yview_moveto(y / self.rows.winfo_height())
+            canvas.yview_moveto(y / rows.winfo_height())
         elif bottom > visible_top + height:
-            canvas.yview_moveto((bottom-height) / self.rows.winfo_height())
+            canvas.yview_moveto((bottom-height) / rows.winfo_height())
 
     def show(self):
         self.deiconify()
@@ -590,9 +695,12 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
             self.panel.settings_window = None
         closing = getattr(self.panel.root, "_nexus_closing", False)
         self._nexus_closing = True
-        if not self._committed and not closing and self.panel.appearance.mode != self.original_theme:
+        if not self._committed and not closing:
             try:
-                self.panel.appearance.set_mode(self.original_theme)  # 取消: undo the live preview
+                if self.panel.appearance.font_choice != self.original_font:
+                    self.panel.appearance.set_font(self.original_font)
+                if self.panel.appearance.mode != self.original_theme:
+                    self.panel.appearance.set_mode(self.original_theme)
             except tk.TclError:
                 pass
         super().destroy()
@@ -606,19 +714,20 @@ class SettingsDialog(DialogMetrics, tk.Toplevel):
             interval = next(sec for sec, label in tc.INTERVAL_CHOICES if label == self.interval.get())
             cfg = {"interval": interval, "panel_auto_refresh": self.auto.get(), "autostart": self.boot.get(),
                    "low_battery_alert": self.alert.get(), "gpu_animation": self.gpu.get(),
-                   "theme": self.theme_mode, "glass_backdrop": self.glass.get()}
+                   "theme": self.theme_mode, "glass_backdrop": self.glass.get(), "ui_font": self.font_selection.get()}
             tc.save_config(cfg, strict=True)
             panel.auto, panel.interval = cfg["panel_auto_refresh"], interval
             panel.glass_enabled = self.glass.get()
             panel.theme_choice.set(theme.MODE_LABELS[self.theme_mode])
             tc.post_to_tray(tc.MSG_RELOAD)
             panel.schedule()
-            panel.transition.set_gpu_enabled(self.gpu.get())
+            panel.set_gpu_enabled(self.gpu.get())
             panel.draw()
             self.feedback.set("设置已保存")
             return True
         except (OSError, ValueError, StopIteration) as exc:
-            self.feedback.set(str(exc) or "设置保存失败，请重试")
+            self.save_error.configure(text=str(exc) or "设置保存失败，请重试")
+            self.save_error.pack(fill="x", padx=self.p(16), pady=(self.p(5), self.p(9)))
             return False
 
     def _links(self):

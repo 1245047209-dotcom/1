@@ -190,8 +190,9 @@ def link_row(dialog, group, title, value, command, *, icon=None, swatch=None, de
     arrow = theme.widget(tk.Label, frame, text=chevron, bg=theme.SURFACE, fg=theme.CHEVRON,
                          font=(family, -p(12)), bd=0)
     arrow.place(relx=1, x=-p(14), rely=.5, anchor="e")
-    label = theme.widget(tk.Label, frame, text=value, bg=theme.SURFACE, fg=theme.MUTED,
-                         font=dialog.font(15), bd=0)
+    value_option = {"textvariable" if isinstance(value, tk.Variable) else "text": value}
+    label = theme.widget(tk.Label, frame, bg=theme.SURFACE, fg=theme.MUTED,
+                         font=dialog.font(15), bd=0, **value_option)
     label.place(relx=1, x=-p(32), rely=.5, anchor="e")
     frame.configure(takefocus=1, highlightthickness=1, cursor="hand2")
     theme.style(frame, highlightbackground=theme.SURFACE, highlightcolor=theme.FOCUS)

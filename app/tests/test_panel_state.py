@@ -5,12 +5,57 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from unittest import TestCase, skipUnless
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 from uuid import uuid4
 
 
 @skipUnless(sys.platform == "win32", "Nexus panel state uses Windows APIs")
 class PanelStateTests(TestCase):
+    def test_starts_native_process_before_initializing_tcl_or_loading_panel(self):
+        import panel_startup as startup
+
+        @contextmanager
+        def primary_instance():
+            yield True
+
+        config = {"theme": "dark", "glass_backdrop": False, "ui_font": "alibaba-regular"}
+        calls = Mock()
+        process = calls.launch.return_value
+        process.poll.return_value = 0
+        with (patch.object(startup.tc, "ui_instance", primary_instance),
+              patch.object(startup.tc, "load_config", return_value=config),
+              patch.object(startup, "launch_native_process", calls.launch),
+              patch.object(startup, "_open_panel", calls.open_panel)):
+            startup.main(["--keep-warm", "--check-updates"], prepare_tcl=calls.prepare)
+
+        self.assertEqual(calls.mock_calls[:3], [
+            call.launch(dark=True, glass=False, font="alibaba-regular", keep_warm=True),
+            call.prepare(),
+            call.open_panel(config, process, True),
+        ])
+        process.terminate.assert_not_called()
+
+    def test_early_native_process_is_closed_if_tcl_fails(self):
+        import panel_startup as startup
+
+        @contextmanager
+        def primary_instance():
+            yield True
+
+        process = Mock()
+        process.poll.return_value = None
+        prepare = Mock(side_effect=OSError("Tcl unavailable"))
+        with (patch.object(startup.tc, "ui_instance", primary_instance),
+              patch.object(startup.tc, "load_config", return_value={}),
+              patch.object(startup, "launch_native_process", return_value=process) as launch,
+              patch.object(startup, "_open_panel") as open_panel,
+              self.assertRaisesRegex(OSError, "Tcl unavailable")):
+            startup.main([], prepare_tcl=prepare)
+
+        launch.assert_called_once_with(dark=None, glass=True, font=None, keep_warm=False)
+        open_panel.assert_not_called()
+        process.terminate.assert_called_once_with()
+
     def test_legacy_settings_default_to_auto_refresh_and_partial_saves_preserve_it(self):
         import tray_common as tc
 

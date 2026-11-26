@@ -36,6 +36,8 @@ UI_TITLE = "Nexus 外设电量中心"
 UI_INSTANCE_KEY = "NexusBatteryCenter.UI." + hashlib.sha256(
     os.path.normcase(os.path.realpath(BASE_DIR)).encode("utf-8")
 ).hexdigest()
+WARM_UI_PROPERTY = "NexusBatteryCenter.WarmUI"
+MSG_ACTIVATE_WARM_UI = "NexusBatteryCenter.ActivateWarmUI"
 ERROR_ALREADY_EXISTS = 183
 
 DEFAULT_CONFIG = {
@@ -45,6 +47,7 @@ DEFAULT_CONFIG = {
     "low_battery_alert": True,
     "gpu_animation": True,
     "theme": "system",
+    "ui_font": "system",
     "glass_level": .48,
     "glass_backdrop": True,   # iOS 版主窗口的毛玻璃背景
 }
@@ -74,8 +77,10 @@ USER32.PostMessageW.argtypes = [ctypes.c_void_p, wintypes.UINT,
                                 ctypes.c_size_t, ctypes.c_ssize_t]
 USER32.RegisterWindowMessageW.restype = wintypes.UINT
 USER32.RegisterWindowMessageW.argtypes = [wintypes.LPCWSTR]
-USER32.ShowWindow.restype = wintypes.BOOL
-USER32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+USER32.GetWindowThreadProcessId.restype = wintypes.DWORD
+USER32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+USER32.AllowSetForegroundWindow.restype = wintypes.BOOL
+USER32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
 USER32.ShowWindowAsync.restype = wintypes.BOOL
 USER32.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
 USER32.SetForegroundWindow.restype = wintypes.BOOL
@@ -392,6 +397,15 @@ def focus_ui(wait_timeout: float = 0.0) -> bool:
         if time.monotonic() >= deadline:
             return False
         time.sleep(.05)
+    if USER32.GetPropW(hwnd, WARM_UI_PROPERTY):
+        message = USER32.RegisterWindowMessageW(MSG_ACTIVATE_WARM_UI)
+        if message:
+            pid = wintypes.DWORD()
+            if USER32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid)) and pid.value:
+                USER32.AllowSetForegroundWindow(pid.value)
+            # WPF must restore its own visibility and layout on the dispatcher.
+            if USER32.PostMessageW(hwnd, message, 0, 0):
+                return True
     USER32.ShowWindowAsync(hwnd, 9)  # SW_RESTORE
     USER32.SetForegroundWindow(hwnd)
     return True

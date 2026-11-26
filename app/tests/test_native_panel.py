@@ -2,12 +2,12 @@
 import unittest
 import queue
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from battery import _parse_aula_battery
 from device_readers import Reading, _read_f87_interface, stamp_observation
 from my_devices import NexusPanel
-from native_panel import NativePanel, make_snapshot
+from native_panel import NativePanel, make_snapshot, start_native_panel
 from reading_ui import ReadingTimes
 from saved_devices import DEFAULT_DEVICE_ID, SavedDevice
 
@@ -81,6 +81,34 @@ class IndependentPanelTests(unittest.TestCase):
 
 
 class NativeBridgeTests(unittest.TestCase):
+    def test_prestarted_process_receives_snapshot_before_waiting_for_window(self):
+        process = object()
+        panel = Mock()
+        snapshot = {"type": "snapshot", "font": "alibaba-regular"}
+        with patch("native_panel.NativePanel") as bridge, \
+                patch("native_panel.launch_native_process") as launch, \
+                patch("native_panel.make_snapshot", return_value=snapshot):
+            bridge.return_value.wait_until_ready.return_value = True
+            self.assertIs(start_native_panel(panel, process), bridge.return_value)
+
+        launch.assert_not_called()
+        bridge.assert_called_once_with(panel, process)
+        self.assertEqual(bridge.return_value.method_calls,
+                         [call._send_snapshot(snapshot), call.wait_until_ready(), call.start()])
+
+    def test_native_readings_update_history_without_drawing_hidden_canvas(self):
+        panel = NexusPanel.__new__(NexusPanel)
+        panel.native_panel = object()
+        reading = Reading("F87 Pro", "", level=58, connected=True)
+        panel.readings = {DEFAULT_DEVICE_ID: reading}
+        panel.reading_times = Mock()
+        panel.draw = Mock(wraps=panel.draw)
+        panel.refresh_readings()
+        panel.draw.assert_not_called()
+        panel.reading_times.observe.assert_called_once_with(DEFAULT_DEVICE_ID, reading)
+        panel.draw()
+        self.assertFalse(hasattr(panel, "draw_count"))
+
     @staticmethod
     def f87_report(level, state):
         packet = bytearray(20)
@@ -101,6 +129,7 @@ class NativeBridgeTests(unittest.TestCase):
         panel.appearance, panel.glass_enabled, panel.busy = SimpleNamespace(dark=False), True, False
 
         snapshot = make_snapshot(panel)
+        self.assertEqual(snapshot["font"], "system")
         ring, = snapshot["rings"]
         device, = snapshot["devices"]
         self.assertEqual(ring["level"], 8)
@@ -146,6 +175,7 @@ class NativeBridgeTests(unittest.TestCase):
                           "mouse": Reading("PRO WIRELESS", "", level=18, connected=True)}
         panel.reading_times = ReadingTimes()
         panel.appearance, panel.glass_enabled, panel.busy = SimpleNamespace(dark=False), True, False
+        panel.appearance.font_choice = "alibaba-semibold"
         panel.device_entries = Mock(wraps=panel.device_entries)
         panel.reading_styles = Mock(wraps=panel.reading_styles)
 
@@ -153,6 +183,7 @@ class NativeBridgeTests(unittest.TestCase):
             snapshot = make_snapshot(panel)
 
         panel.device_entries.assert_called_once_with()
+        self.assertEqual(snapshot["font"], "alibaba-semibold")
         self.assertEqual(panel.reading_styles.call_count, 2)
         keyboard, mouse = snapshot["devices"]
         self.assertEqual(keyboard["details"]["level"], "58%")

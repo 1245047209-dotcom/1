@@ -212,7 +212,13 @@ class UIScale:
             size = original["size"]
             pixels = abs(size) * (self.pixels_per_point if size > 0 else 1)
             original["size"] = -max(1, self.px(pixels))
-            self.fonts[key] = tkfont.Font(root=self.root, **original)
+            parts = self.root.tk.splitlist(specification)
+            family = parts[0] if parts else None
+            if family in (theme.FONT, theme.NUM_FONT):
+                self.fonts[key] = theme.font(self.root, original["size"], original["weight"],
+                                             numeric=family == theme.NUM_FONT)
+            else:
+                self.fonts[key] = tkfont.Font(root=self.root, **original)
         return self.fonts[key]
 
     def image(self, name):

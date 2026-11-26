@@ -69,7 +69,6 @@ NIF_INFO = 0x10
 NIIF_WARNING, NIIF_RESPECT_QUIET_TIME = 0x02, 0x80
 NIN_BALLOONUSERCLICK = 0x0405
 
-SW_RESTORE = 9
 
 # --------------------------------------------------------------------------
 # Win32 结构体与原型
@@ -330,10 +329,7 @@ class TrayApp:
 
     # ---- 打开简洁界面 ---------------------------------------------------
     def open_ui(self) -> None:
-        hwnd = tc.ui_hwnd()
-        if hwnd:
-            USER32.ShowWindow(hwnd, SW_RESTORE)
-            USER32.SetForegroundWindow(hwnd)
+        if tc.focus_ui():
             self.log("简洁界面已在前台")
             return
         import subprocess

@@ -10,18 +10,25 @@ import aula_catalog
 
 
 class AulaDiscovery:
-    def __init__(self, state_path=None):
+    def __init__(self, state_path=None, *, autostart=True):
         self.path = Path(state_path) if state_path else Path(__file__).with_name("aula_discovery_state.json")
         self.results = queue.Queue(maxsize=1)
         self.stop = threading.Event()
         self.lock = threading.RLock()
+        self._lifecycle_lock = threading.Lock()
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             self.ignored = {str(v).casefold() for v in data.get("ignored", [])}
         except (OSError, ValueError, TypeError, AttributeError):
             self.ignored = set()
         self.thread = threading.Thread(target=self._run, daemon=True, name="aula-discovery")
-        self.thread.start()
+        if autostart:
+            self.start()
+
+    def start(self):
+        with self._lifecycle_lock:
+            if not self.stop.is_set() and self.thread.ident is None:
+                self.thread.start()
 
     def _run(self):
         from receiver_scan import scan_receivers
@@ -62,4 +69,5 @@ class AulaDiscovery:
             return []
 
     def close(self):
-        self.stop.set()
+        with self._lifecycle_lock:
+            self.stop.set()
