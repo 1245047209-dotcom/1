@@ -327,6 +327,7 @@ class NexusPanel:
         except DeviceStoreError as exc:
             root.after(300, lambda text=str(exc): self.show_device_error(text))
         self.default_visible = self.device_store.default_visible()
+        self.device_order = self.device_store.order()
         self.readings = {DEFAULT_DEVICE_ID: Reading(KEYBOARD_TITLE, "正在读取")} if self.default_visible else {}
         self.readings.update({d.id: Reading(d.label, "正在读取") for d in self.saved_devices})
         self.reading = self.readings.get(self.selected_device_id, Reading("暂无设备", ""))
@@ -1608,8 +1609,23 @@ class NexusPanel:
         return next((d for d in self.saved_devices if d.id == self.selected_device_id), None)
 
     def device_entries(self):
-        return ([(DEFAULT_DEVICE_ID, None)] if getattr(self, "default_visible", True) else []) + [
+        entries = ([(DEFAULT_DEVICE_ID, None)] if getattr(self, "default_visible", True) else []) + [
             (d.id, d) for d in getattr(self, "saved_devices", [])]
+        order = getattr(self, "device_order", None)
+        if order:
+            rank = {key: index for index, key in enumerate(order)}
+            entries.sort(key=lambda item: rank.get(item[0], len(rank)))
+        return entries
+
+    def reorder_devices(self, ordered_ids):
+        try:
+            self.device_store.reorder(ordered_ids)
+            self.saved_devices, self.selected_device_id = self.device_store.load()
+            self.device_order = self.device_store.order()
+        except (OSError, ValueError) as exc:
+            self.show_device_error(str(exc))
+            return
+        self.draw()
 
     def show_device_error(self, message):
         from tkinter import messagebox
@@ -1617,6 +1633,7 @@ class NexusPanel:
 
     def device_changed(self):
         self.default_visible = self.device_store.default_visible()
+        self.device_order = self.device_store.order()
         self.refresh_generation += 1  # Discard late reads from the previous device.
         for name in ("refresh_result_after_id", "refresh_feedback_after_id"):
             timer = getattr(self, name)

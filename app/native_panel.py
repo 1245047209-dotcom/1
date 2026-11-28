@@ -38,6 +38,59 @@ def _asset(device):
     return next((relative for relative in _ARTWORK.get(kind, ()) if (APP_ROOT / relative).is_file()), None)
 
 
+def _device_level(panel, reading):
+    level, _charging = panel.ring_state(reading)
+    return level
+
+
+def _history_for_device(panel, key, reading):
+    """Build recent percentage points for the detail sparkline without blocking."""
+    from saved_devices import DEFAULT_DEVICE_ID
+
+    level = _device_level(panel, reading)
+    store = getattr(panel, "_native_history", None)
+    if store is None:
+        store = {}
+        try:
+            panel._native_history = store
+        except AttributeError:
+            store = {}
+
+    now = time.time()
+    bucket = store.setdefault(key, [])
+    if isinstance(level, int) and 0 <= level <= 100:
+        if not bucket or bucket[-1][1] != level or now - bucket[-1][0] >= 300:
+            bucket.append((now, level))
+            if len(bucket) > 24:
+                del bucket[:-24]
+
+    points = [val for _ts, val in bucket]
+    span = "本次运行记录"
+
+    # Reconstruct recorded discharge steps for the primary keyboard when real native UI is attached.
+    if (key == DEFAULT_DEVICE_ID and len(points) < 3
+            and isinstance(getattr(panel, "native_panel", None), NativePanel)):
+        try:
+            import battery_runtime as br
+            if br.HISTORY_PATH.is_file():
+                est = br.UsageEstimator(json.loads(br.HISTORY_PATH.read_text(encoding="utf-8")))
+                if est.intervals and isinstance(level, int):
+                    rebuilt = [level]
+                    cursor = level
+                    for item in reversed(est.intervals[-8:]):
+                        cursor = min(100, cursor + int(item["drop"]))
+                        rebuilt.append(cursor)
+                    rebuilt.reverse()
+                    points = rebuilt
+                    span = "最近耗电记录"
+        except Exception:
+            pass
+
+    if not points and isinstance(level, int):
+        points = [level]
+    return points, span
+
+
 def make_snapshot(panel):
     """Report the same device, battery, and status data used by the Tk panel."""
     from device_sheet import format_sheet_values
@@ -59,6 +112,7 @@ def make_snapshot(panel):
         detail_rows = {name: value for name, _label, value in detail["rows"]}
         component_values = (reading.components or {}) if not reading.error else {}
         kinds = product_kind(device)
+        history_points, history_span = _history_for_device(panel, key, reading)
         details = {
             "level": detail["level"],
             "caption": styles["caption"]["text"],
@@ -67,6 +121,8 @@ def make_snapshot(panel):
             "source": detail_rows.get("source", ""),
             "status": detail["status"],
             "low": detail["low"],
+            "history": history_points,
+            "historySpan": history_span,
             "rows": [{"label": label, "value": value} for _name, label, value in detail["rows"]],
             "components": [{"label": label, "level": styles[part + "_level"]["text"],
                             "time": styles[part + "_time"]["text"],
@@ -77,12 +133,18 @@ def make_snapshot(panel):
                         "kind": "audio" if kinds == "beats-studio-buds" else kinds or "usb",
                         "status": styles["row_sub"]["text"], "connection": detail_rows["connection"],
                         "power": styles["power"]["text"], "low": detail["low"],
+                        "connected": reading.connected is not False,
                         "asset": _asset(device), "details": details})
+
+    import theme
 
     header = panel.header_styles(entries)
     return {"type": "snapshot", "theme": "dark" if panel.appearance.dark else "light",
             "font": getattr(panel.appearance, "font_choice", DEFAULT_UI_FONT),
-            "glass": panel.glass_enabled, "summary": header["summary"]["text"],
+            "glass": panel.glass_enabled,
+            "glassLevel": round(theme.glass_value(getattr(panel.appearance, "glass_level", .48)), 3),
+            "gpu": bool(getattr(panel, "_gpu_animation", True)),
+            "summary": header["summary"]["text"],
             "summaryLow": any(device["low"] for device in devices),
             "updated": header["summary_time"]["text"].removeprefix(" · "),
             "refreshing": panel.busy, "rings": rings, "devices": devices,
@@ -221,6 +283,10 @@ class NativePanel:
         payload = {
             "type": "settings",
             "themeMode": mode,
+            "glassBackdrop": bool(getattr(self.panel, "glass_enabled", cfg.get("glass_backdrop", True))),
+            "glassLevel": round(theme.glass_value(
+                getattr(self.panel.appearance, "glass_level", cfg.get("glass_level", .48))
+            ), 3),
             "interval": int(getattr(self.panel, "interval", cfg.get("interval", 60))),
             "autoRefresh": bool(getattr(self.panel, "auto", cfg.get("panel_auto_refresh", True))),
             "autostart": bool(tc.is_autostart_enabled()),
@@ -250,6 +316,9 @@ class NativePanel:
             if mode not in theme.MODE_LABELS:
                 mode = "system"
             font_choice = str(message.get("uiFont", DEFAULT_UI_FONT))
+            glass_level = round(theme.glass_value(
+                message.get("glassLevel", getattr(panel.appearance, "glass_level", .48))
+            ), 3)
             cfg = {
                 "interval": interval,
                 "panel_auto_refresh": bool(message.get("autoRefresh", True)),
@@ -258,11 +327,13 @@ class NativePanel:
                 "gpu_animation": bool(message.get("gpuAnimation", True)),
                 "theme": mode,
                 "glass_backdrop": bool(message.get("glassBackdrop", True)),
+                "glass_level": glass_level,
                 "ui_font": font_choice,
             }
             tc.save_config(cfg, strict=True)
             panel.appearance.set_mode(mode)
             panel.appearance.set_font(font_choice)
+            panel.appearance.glass_level = glass_level
             panel.auto, panel.interval = cfg["panel_auto_refresh"], interval
             panel.glass_enabled = cfg["glass_backdrop"]
             if hasattr(panel, "theme_choice"):
@@ -326,6 +397,14 @@ class NativePanel:
             key = message.get("id")
             if isinstance(key, str):
                 self.panel.remove_device(key)
+        elif action == "reorder":
+            ids = message.get("ids")
+            if isinstance(ids, list) and hasattr(self.panel, "reorder_devices"):
+                self.panel.reorder_devices(ids)
+        elif action in ("searchScan", "searchShowOther", "searchSetModel", "searchSetVariant", "searchAdd"):
+            if getattr(self, "_search_session", None) is None:
+                self._search_session = _NativeSearchSession(self)
+            self._search_session.handle(action, message)
         elif action == "querySettings":
             self._enqueue(self._settings_payload())
         elif action == "saveSettings":
@@ -543,6 +622,209 @@ class _NativeUpdateView:
             return
         payload = {"type": "updateState"}
         payload.update(self.state_fields())
+        self.bridge._enqueue(payload)
+
+
+class _NativeSearchSession:
+    """Drives the native WPF Add Device drawer using receiver_search's hardware scanners."""
+
+    def __init__(self, bridge):
+        from aula_catalog import catalog
+
+        self.bridge = bridge
+        self.mode = "usb"
+        self.show_other = False
+        self.busy = False
+        self.scan_token = 0
+        self.scan_error = None
+        self.devices = []
+        self.pending = set()
+        self.aula_models = {m["model"]: m for m in catalog()["models"]}
+
+    def handle(self, action, message):
+        if action == "searchScan":
+            mode = "bluetooth" if message.get("mode") == "bluetooth" else "usb"
+            if "showOther" in message:
+                self.show_other = bool(message.get("showOther"))
+            self.start_scan(mode)
+        elif action == "searchShowOther":
+            self.show_other = bool(message.get("enabled"))
+            self.push_state()
+        elif action == "searchSetModel":
+            self.set_model(str(message.get("instanceId", "")), str(message.get("model", "")))
+        elif action == "searchSetVariant":
+            self.set_variant(str(message.get("instanceId", "")), int(message.get("variant", 0)))
+        elif action == "searchAdd":
+            self.add_device(str(message.get("instanceId", "")))
+
+    def start_scan(self, mode):
+        import receiver_search as rs
+
+        self.mode = mode
+        self.busy = True
+        self.scan_error = None
+        self.devices = []
+        self.pending.clear()
+        self.scan_token += 1
+        token = self.scan_token
+        self.push_state(status=rs.SEARCH_MESSAGES[mode], feedback="")
+
+        def worker():
+            try:
+                found = rs.scan_devices(mode)
+                err = None
+            except Exception as exc:
+                found, err = [], str(exc) or type(exc).__name__
+            panel = self.bridge.panel
+            panel.root.after(0, lambda: self._finish_scan(token, mode, found, err))
+
+        Thread(target=worker, name="native-device-search", daemon=True).start()
+
+    def _finish_scan(self, token, mode, found, err):
+        if token != self.scan_token or self.bridge._closed:
+            return
+        self.busy = False
+        self.scan_error = err
+        self.devices = list(found or ())
+        self.push_state()
+
+    def _is_added(self, device):
+        store = getattr(self.bridge.panel, "device_store", None)
+        if store is None:
+            return False
+        try:
+            return store.id_for(device) is not None
+        except (OSError, ValueError):
+            return False
+
+    def _action_label(self, device):
+        if self._is_added(device):
+            return "更新" if device.instance_id in self.pending else "已添加"
+        if not device.wireless and getattr(device, "transport", "usb") == "usb":
+            return "仍然添加"
+        return "添加"
+
+    def _find_index(self, instance_id):
+        return next((i for i, d in enumerate(self.devices) if d.instance_id == instance_id), -1)
+
+    def set_model(self, instance_id, name):
+        from dataclasses import replace
+        import receiver_search as rs
+
+        if name == rs.AUTO:
+            self.start_scan(self.mode)
+            return
+        idx = self._find_index(instance_id)
+        model = self.aula_models.get(name)
+        if idx < 0 or model is None:
+            return
+        dev = self.devices[idx]
+        self.devices[idx] = replace(
+            dev, model=model["model"], manufacturer="AULA", category="键盘", product_variant=0,
+            identification="用户指定型号；电量支持仍按实际硬件版本校验")
+        self.pending.add(dev.instance_id)
+        action = self._action_label(self.devices[idx])
+        self.push_state(feedback=f"型号改为 {model['model']}，点「{action}」生效。")
+
+    def set_variant(self, instance_id, variant):
+        from dataclasses import replace
+
+        idx = self._find_index(instance_id)
+        if idx < 0:
+            return
+        dev = self.devices[idx]
+        self.devices[idx] = replace(dev, product_variant=max(0, variant))
+        self.pending.add(dev.instance_id)
+        action = self._action_label(self.devices[idx])
+        self.push_state(feedback=f"已选择配色 {variant + 1}，点「{action}」生效。")
+
+    def add_device(self, instance_id):
+        idx = self._find_index(instance_id)
+        if idx < 0:
+            return
+        dev = self.devices[idx]
+        updating = self._is_added(dev)
+        try:
+            created = self.bridge.panel.add_receiver(dev)
+        except (OSError, ValueError) as exc:
+            self.push_state(feedback="添加失败：" + (str(exc) or type(exc).__name__), feedback_error=True)
+            return
+        self.pending.discard(dev.instance_id)
+        if updating:
+            msg = f"已更新 {dev.model}。"
+        elif created:
+            msg = f"已添加 {dev.model}，可以继续添加，或点「完成」返回。"
+        else:
+            msg = f"{dev.model} 已在设备列表中。"
+        self.push_state(feedback=msg)
+
+    def push_state(self, *, status=None, feedback=None, feedback_error=False):
+        from aula_catalog import model_for_device
+        from aula_protocols import legacy_default
+        import receiver_search as rs
+
+        bluetooth = self.mode == "bluetooth"
+        visible = [i for i, d in enumerate(self.devices) if bluetooth or d.wireless or self.show_other]
+        items = []
+        if not self.busy and self.scan_error is None:
+            for idx in visible:
+                dev = self.devices[idx]
+                eligible = rs.aula_eligible(dev)
+                model = model_for_device(dev) if eligible else None
+                variants_raw = rs.variant_swatches(model) if model and not legacy_default(dev) else []
+                full = dev.details()
+                items.append({
+                    "instanceId": dev.instance_id,
+                    "model": dev.model,
+                    "subtitle": rs.row_subtitle(dev, bluetooth),
+                    "action": self._action_label(dev),
+                    "transport": getattr(dev, "transport", "usb"),
+                    "asset": _asset(dev),
+                    "aulaEligible": eligible,
+                    "selectedModel": model["model"] if model else rs.AUTO,
+                    "selectedVariant": int(getattr(dev, "product_variant", 0)),
+                    "variants": [{"label": label, "colors": colors} for label, colors in variants_raw],
+                    "details": full.split("\n\n")[0],
+                    "fullDetails": full,
+                })
+
+        if self.busy:
+            computed_status = status or rs.SEARCH_MESSAGES[self.mode]
+            ph_title, ph_detail = "正在查找设备…", ""
+        elif self.scan_error is not None:
+            computed_status = "搜索失败"
+            ph_title, ph_detail = "搜索失败，请点「重新搜索」", "无法读取设备列表：" + self.scan_error
+        else:
+            computed_status = status or rs.status_text(bluetooth, self.devices, visible, self.show_other)
+            if not visible:
+                if bluetooth:
+                    ph_title = "未找到已配对的蓝牙设备"
+                    ph_detail = "请先在 Windows 蓝牙设置中完成配对，再点「重新搜索」。"
+                else:
+                    ph_title = "未找到可显示的 USB 设备"
+                    ph_detail = "插入接收器后点「重新搜索」，或打开下方的「显示待确认的 USB 设备」。"
+            else:
+                ph_title = ph_detail = ""
+
+        hint = ("列表来自 Windows 已配对的蓝牙设备。新设备请先在 Windows「蓝牙和其他设备」里配对。"
+                if bluetooth else
+                "打开后也会列出无法确认能否读取电量的 USB 设备。点开狼蛛键盘一行可以更改型号和配色。")
+
+        payload = {
+            "type": "searchState",
+            "searchMode": self.mode,
+            "searchBusy": self.busy,
+            "showOther": self.show_other,
+            "status": computed_status,
+            "placeholderTitle": ph_title,
+            "placeholderDetail": ph_detail,
+            "hint": hint,
+            "aulaModels": [rs.AUTO, *self.aula_models.keys()],
+            "searchItems": items,
+        }
+        if feedback is not None:
+            payload["feedback"] = feedback
+            payload["feedbackError"] = feedback_error
         self.bridge._enqueue(payload)
 
 

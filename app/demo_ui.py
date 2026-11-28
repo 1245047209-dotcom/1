@@ -15,6 +15,7 @@ from saved_devices import SavedDevice, DEFAULT_DEVICE_ID
 class MemoryStore:
     def __init__(self):
         self.selected = DEFAULT_DEVICE_ID
+        self.device_order = []
         self.devices = [
             SavedDevice("demo-mouse", "demo-mouse", "PRO WIRELESS", "Logitech", "046D:C539", "鼠标"),
             SavedDevice("demo-audio", "demo-audio", "Beats Studio Buds", "Beats", "00:11:22:33:44:55", "耳机", transport="bluetooth"),
@@ -25,6 +26,14 @@ class MemoryStore:
 
     def default_visible(self):
         return True
+
+    def order(self):
+        return list(self.device_order)
+
+    def reorder(self, ordered_ids):
+        self.device_order = list(ordered_ids)
+        rank = {key: index for index, key in enumerate(self.device_order)}
+        self.devices.sort(key=lambda device: rank.get(device.id, len(rank)))
 
     def select(self, key):
         self.selected = key

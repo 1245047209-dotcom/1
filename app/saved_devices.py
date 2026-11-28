@@ -95,10 +95,26 @@ class DeviceStore:
     def _options(self):
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
-            return {"default_visible": bool(data.get("default_visible", True)),
+            opts = {"default_visible": bool(data.get("default_visible", True)),
                     "ignored_instances": data.get("ignored_instances", [])}
+            if isinstance(data.get("device_order"), list):
+                opts["device_order"] = [str(v) for v in data["device_order"] if isinstance(v, str)]
+            return opts
         except (OSError, ValueError, AttributeError):
             return {"default_visible": True, "ignored_instances": []}
+
+    def order(self):
+        return list(self._options().get("device_order", ()))
+
+    def reorder(self, ordered_ids):
+        clean_order = [str(item) for item in (ordered_ids or ()) if isinstance(item, str) and item]
+        with state_file_lock(self.path):
+            devices, selected = self.load()
+            options = self._options()
+            rank = {key: index for index, key in enumerate(clean_order)}
+            devices.sort(key=lambda d: rank.get(d.id, len(rank)))
+            options["device_order"] = clean_order
+            self._save(devices, selected, options=options)
 
     def can_auto_add(self, receiver):
         from aula_protocols import legacy_default
