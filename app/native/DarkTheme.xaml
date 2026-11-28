@@ -1,25 +1,50 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <SolidColorBrush x:Key="ClientTintBrush" Color="#80181D2C"/>
-    <SolidColorBrush x:Key="BackdropFallbackBrush" Color="#1A2030"/>
-    <SolidColorBrush x:Key="TextBrush" Color="#F7FAFF"/>
-    <SolidColorBrush x:Key="MutedTextBrush" Color="#DEE8F4"/>
-    <SolidColorBrush x:Key="WarningTextBrush" Color="#FFA7A3"/>
-    <SolidColorBrush x:Key="CardFillBrush" Color="#E3262B3C"/>
-    <SolidColorBrush x:Key="CardEdgeBrush" Color="#463E4860"/>
-    <SolidColorBrush x:Key="BrightCardFillBrush" Color="#A02D3340"/>
-    <SolidColorBrush x:Key="BrightCardEdgeBrush" Color="#18E5EDF8"/>
-    <SolidColorBrush x:Key="RingTrackBrush" Color="#61DDE9F7"/>
-    <SolidColorBrush x:Key="HealthyRingBrush" Color="#50E477"/>
-    <SolidColorBrush x:Key="MediumRingBrush" Color="#FFC83F"/>
-    <SolidColorBrush x:Key="LowRingBrush" Color="#FF6968"/>
-    <SolidColorBrush x:Key="RingIconBrush" Color="#F3F8FF"/>
-    <SolidColorBrush x:Key="ChargeGlyphBrush" Color="#082819"/>
-    <SolidColorBrush x:Key="ArtworkFillBrush" Color="#3C849CC2"/>
-    <SolidColorBrush x:Key="DividerBrush" Color="#33B2C6DE"/>
-    <SolidColorBrush x:Key="RefreshButtonFillBrush" Color="#F21460BE"/>
-    <SolidColorBrush x:Key="IconButtonFillBrush" Color="#9E24354A"/>
-    <SolidColorBrush x:Key="IconButtonTextBrush" Color="#D5E9FF"/>
-    <SolidColorBrush x:Key="RowHoverBrush" Color="#492B4B70"/>
-    <SolidColorBrush x:Key="FocusBrush" Color="#EBAED4FF"/>
+    <SolidColorBrush x:Key="ClientTintBrush" Color="#82141926"/>
+    <SolidColorBrush x:Key="BackdropFallbackBrush" Color="#131824"/>
+    <SolidColorBrush x:Key="TextBrush" Color="#F5F8FF"/>
+    <SolidColorBrush x:Key="MutedTextBrush" Color="#98A7BC"/>
+    <SolidColorBrush x:Key="ChevronBrush" Color="#728299"/>
+    <SolidColorBrush x:Key="WarningTextBrush" Color="#FF6961"/>
+    <SolidColorBrush x:Key="HealthyTextBrush" Color="#32D74B"/>
+    <SolidColorBrush x:Key="CardFillBrush" Color="#DE1E2433"/>
+    <SolidColorBrush x:Key="CardEdgeBrush" Color="#34DCE8FA"/>
+    <SolidColorBrush x:Key="BrightCardFillBrush" Color="#B2252C3D"/>
+    <SolidColorBrush x:Key="BrightCardEdgeBrush" Color="#28E5EDF8"/>
+    <SolidColorBrush x:Key="CardShadowBrush" Color="#48000000"/>
+    <LinearGradientBrush x:Key="CardHighlightBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#2BFFFFFF" Offset="0"/>
+        <GradientStop Color="#00FFFFFF" Offset="0.42"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="RingTrackBrush" Color="#26DCE8FA"/>
+    <SolidColorBrush x:Key="HealthyRingBrush" Color="#32D74B"/>
+    <SolidColorBrush x:Key="MediumRingBrush" Color="#FFD60A"/>
+    <SolidColorBrush x:Key="LowRingBrush" Color="#FF453A"/>
+    <SolidColorBrush x:Key="RingIconBrush" Color="#EEF4FF"/>
+    <SolidColorBrush x:Key="ChargeGlyphBrush" Color="#062912"/>
+    <SolidColorBrush x:Key="ChargeBadgeRimBrush" Color="#1E2433"/>
+    <SolidColorBrush x:Key="ArtworkFillBrush" Color="#21DCE8FA"/>
+    <SolidColorBrush x:Key="ArtworkEdgeBrush" Color="#1FDCE8FA"/>
+    <SolidColorBrush x:Key="DividerBrush" Color="#21C8D8EE"/>
+    <LinearGradientBrush x:Key="RefreshButtonFillBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#1E8FFF" Offset="0"/>
+        <GradientStop Color="#0A78EC" Offset="1"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="RefreshShadowBrush" Color="#450A84FF"/>
+    <SolidColorBrush x:Key="IconButtonFillBrush" Color="#2EDCE8FA"/>
+    <SolidColorBrush x:Key="IconButtonEdgeBrush" Color="#26FFFFFF"/>
+    <SolidColorBrush x:Key="IconButtonTextBrush" Color="#66B6FF"/>
+    <SolidColorBrush x:Key="RowHoverBrush" Color="#26DCE8FA"/>
+    <SolidColorBrush x:Key="PressOverlayBrush" Color="#24FFFFFF"/>
+    <SolidColorBrush x:Key="FocusBrush" Color="#E670B8FF"/>
+    <SolidColorBrush x:Key="AccentTextBrush" Color="#4CA6FF"/>
+    <SolidColorBrush x:Key="SheetFillBrush" Color="#FC171C28"/>
+    <SolidColorBrush x:Key="SheetEdgeBrush" Color="#2CFFFFFF"/>
+    <SolidColorBrush x:Key="SheetDimBrush" Color="#7203060C"/>
+    <SolidColorBrush x:Key="GroupFillBrush" Color="#FF212838"/>
+    <SolidColorBrush x:Key="SoftFillBrush" Color="#26DCE8FA"/>
+    <SolidColorBrush x:Key="GrabberBrush" Color="#4DDCE8FA"/>
+    <SolidColorBrush x:Key="SwitchOffBrush" Color="#3ADCE8FA"/>
+    <SolidColorBrush x:Key="MenuFillBrush" Color="#FA22293A"/>
+    <SolidColorBrush x:Key="MenuHoverBrush" Color="#26DCE8FA"/>
 </ResourceDictionary>

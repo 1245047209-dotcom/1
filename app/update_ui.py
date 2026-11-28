@@ -53,7 +53,12 @@ class UpdateManager:
             self.window.show()
             return
         from app_dialogs import SettingsDialog, UpdateDialog
+        from native_panel import NativePanel
         panel = getattr(self.root, "_nexus_panel", None)
+        if panel is not None and isinstance(getattr(panel, "native_panel", None), NativePanel):
+            panel.updates = self
+            panel.native_panel.attach_updates(self)
+            return
         if panel is not None:
             panel.updates = self
             dialog = SettingsDialog(panel, self)

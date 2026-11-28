@@ -1,7 +1,7 @@
 {
-  "tag": "v73.8",
-  "installer": "Nexus-v73.8-Windows-x64-Setup.exe",
-  "source": "Nexus-v73.8-source.zip",
+  "tag": "v73.9",
+  "installer": "Nexus-v73.9-Windows-x64-Setup.exe",
+  "source": "Nexus-v73.9-source.zip",
   "base_installer": {
     "url": "https://github.com/1245047209-dotcom/1/releases/download/v73.7/Nexus-v73.7-Windows-x64-Setup.exe",
     "sha256": "57ebbd2122059f42e709f752aca65932213f7cd832393365170e2b67176a5184"

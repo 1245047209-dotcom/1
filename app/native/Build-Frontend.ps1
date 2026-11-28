@@ -16,7 +16,8 @@ Push-Location -LiteralPath $PSScriptRoot
 try {
     & $compiler /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 `
         ('/win32icon:' + $icon) ('/out:' + $output) @references `
-        /resource:NexusWindow.xaml /resource:DarkTheme.xaml ('/resource:' + $icon + ',nexus.ico') NexusNative.cs
+        /resource:NexusWindow.xaml /resource:DarkTheme.xaml ('/resource:' + $icon + ',nexus.ico') `
+        NexusMotion.cs NexusNative.cs
     if ($LASTEXITCODE -ne 0) { throw "Nexus native frontend compilation failed with exit code $LASTEXITCODE." }
 } finally {
     Pop-Location
